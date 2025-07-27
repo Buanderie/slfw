@@ -6,7 +6,7 @@ import (
 	"net"
 	"os"
 	"unsafe"
-
+	"strings"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
@@ -15,7 +15,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-//go:generate bpf2go -cc clang -cflags "-O2 -g -Wall -Werror -I/usr/include/x86_64-linux-gnu" FirewallBPF ./bpf/inbound.c ./bpf/outbound.c
+//go:generate bpf2go -cc clang -cflags "-O2 -g -Wall -I/usr/include/x86_64-linux-gnu" FirewallBPF ./bpf/inbound.c ./bpf/outbound.c
 
 type Rule struct {
 	Protocol        string `yaml:"protocol"`
@@ -23,7 +23,6 @@ type Rule struct {
 	DestinationIP   string `yaml:"destination_ip"`
 	SourcePort      string `yaml:"source_port"`
 	DestinationPort string `yaml:"destination_port"`
-	ICMPType        int    `yaml:"icmp_type,omitempty"`
 	Action          string `yaml:"action"`
 	Description     string `yaml:"description"`
 }
@@ -37,6 +36,7 @@ type InterfaceConfig struct {
 	Name     string          `yaml:"name"`
 	Type     string          `yaml:"type"`
 	Enabled  bool            `yaml:"enabled"`
+	XDPAttachMode string         `yaml:"xdp_attach_mode"` // Added for XDP mode
 	Inbound  DirectionConfig `yaml:"inbound"`
 	Outbound DirectionConfig `yaml:"outbound"`
 }
@@ -229,11 +229,24 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Attach inbound program (XDP)
-		xdpLink, err := link.AttachXDP(link.XDPOptions{
+		// Set XDP attach mode
+		xdpOptions := link.XDPOptions{
 			Program:   inboundProg,
 			Interface: iface_link.Attrs().Index,
-		})
+		}
+		switch strings.ToLower(iface.XDPAttachMode) {
+		case "drv":
+			xdpOptions.Flags = link.XDPDriverMode
+		case "skb":
+			xdpOptions.Flags = link.XDPGenericMode
+		case "hw":
+			xdpOptions.Flags = link.XDPOffloadMode
+		default:
+			xdpOptions.Flags = 0 // Auto-detect (tries drv, falls back to skb)
+		}
+		
+		// Attach inbound program (XDP)
+		xdpLink, err := link.AttachXDP(xdpOptions)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Cannot attach XDP program to %s: %v\n", iface.Name, err)
 			fmt.Fprintf(os.Stderr, "Trying to use TC ingress as fallback...\n")
@@ -380,8 +393,6 @@ func main() {
 			}
 			fmt.Printf("  Dest port: %s -> %d\n", rule.DestinationPort, key.DstPort)
 			
-			key.ICMPType = uint8(rule.ICMPType)
-			
 			// Map action strings to numbers
 			if rule.Action == "ACCEPT" {
 				value.Action = 1
@@ -445,8 +456,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "Error parsing destination port %s: %v\n", rule.DestinationPort, err)
 					continue
 				}
-				key.ICMPType = uint8(rule.ICMPType)
-				
+
 				// Map action strings to numbers
 				if rule.Action == "ACCEPT" {
 					value.Action = 1

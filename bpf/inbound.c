@@ -24,7 +24,6 @@ struct rule_key {
     __u16 src_port;
     __u16 dst_port;
     __u8 protocol;
-    __u8 icmp_type;
     __u32 src_ip_mask;
     __u32 dst_ip_mask;
 };
@@ -51,38 +50,48 @@ struct {
 static __always_inline void create_lookup_key(struct rule_key *key,
                                               __u32 src_ip, __u32 dst_ip,
                                               __u16 src_port, __u16 dst_port,
-                                              __u8 protocol, __u8 icmp_type) {
+                                              __u8 protocol) {
     key->src_ip = src_ip;
     key->dst_ip = dst_ip;
     key->src_port = src_port;
     key->dst_port = dst_port;
     key->protocol = protocol;
-    key->icmp_type = icmp_type;
-    key->src_ip_mask = 0xffffffff;
-    key->dst_ip_mask = 0xffffffff;
+    // key->src_ip_mask = 0xffffffff;
+    // key->dst_ip_mask = 0xffffffff;
+    key->src_ip_mask = 0x0;
+    key->dst_ip_mask = 0x0;
 }
 
 SEC("xdp")
 int xdp_firewall_inbound(struct xdp_md *ctx) {
+
+    bpf_printk("XDP SBOOB program loaded and running\n");
+
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
 
     struct ethhdr *eth = data;
-    if ((void *)eth + sizeof(*eth) > data_end)
+    if ((void *)eth + sizeof(*eth) > data_end) {
+        bpf_printk("--- DBG 0\n");
         return XDP_PASS;
+    }
+        
 
-    if (eth->h_proto != __constant_htons(ETH_P_IP))
+    if (eth->h_proto != __constant_htons(ETH_P_IP)) {
+        bpf_printk("--- DBG 1\n");
         return XDP_PASS;
+    }
 
     struct iphdr *ip = data + sizeof(*eth);
-    if ((void *)ip + sizeof(*ip) > data_end)
+    if ((void *)ip + sizeof(*ip) > data_end) {
+        bpf_printk("--- DBG 2\n");
         return XDP_PASS;
+    }
 
     __u32 src_ip = ip->saddr;
     __u32 dst_ip = ip->daddr;
     __u8 protocol = ip->protocol;
     __u16 src_port = 0, dst_port = 0;
-    __u8 icmp_type = 0;
 
     struct rule_key lookup_key = {};
     struct rule_value *value;
@@ -95,56 +104,71 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
             return XDP_PASS;
         src_port = __constant_ntohs(tcp->source);
         dst_port = __constant_ntohs(tcp->dest);
+        bpf_printk("--- TCP\n");
     } else if (protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)ip + ip->ihl * 4;
         if ((void *)udp + sizeof(*udp) > data_end)
             return XDP_PASS;
         src_port = __constant_ntohs(udp->source);
         dst_port = __constant_ntohs(udp->dest);
+        bpf_printk("--- UDP\n");
     } else if (protocol == IPPROTO_ICMP) {
         struct icmphdr *icmp = (void *)ip + ip->ihl * 4;
         if ((void *)icmp + sizeof(*icmp) > data_end)
             return XDP_PASS;
-        icmp_type = icmp->type;
+        bpf_printk("--- ICMP\n");
     }
 
     // 1. Exact match
-    create_lookup_key(&lookup_key, src_ip, dst_ip, src_port, dst_port, protocol, icmp_type);
+    create_lookup_key(&lookup_key, src_ip, dst_ip, src_port, dst_port, protocol);
     value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
-    if (value)
+    if (value) {
+        bpf_printk("value_0 %d\n", value->action);
         return value->action ? XDP_PASS : XDP_DROP;
+    }
 
     // 2. Source any
-    create_lookup_key(&lookup_key, 0, dst_ip, src_port, dst_port, protocol, icmp_type);
+    create_lookup_key(&lookup_key, 0, dst_ip, src_port, dst_port, protocol);
     value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
-    if (value)
+    if (value) {
+        bpf_printk("value_1 %d\n", value->action);
         return value->action ? XDP_PASS : XDP_DROP;
+    }
 
     // 3. Destination any
-    create_lookup_key(&lookup_key, src_ip, 0, src_port, dst_port, protocol, icmp_type);
+    create_lookup_key(&lookup_key, src_ip, 0, src_port, dst_port, protocol);
     value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
-    if (value)
+    if (value) {
+        bpf_printk("value_2 %d\n", value->action);
         return value->action ? XDP_PASS : XDP_DROP;
+    }
 
     // 4. IPs any
-    create_lookup_key(&lookup_key, 0, 0, src_port, dst_port, protocol, icmp_type);
+    create_lookup_key(&lookup_key, 0, 0, src_port, dst_port, protocol);
     value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
-    if (value)
+    if (value) {
+        bpf_printk("value_3 %d\n", value->action);
         return value->action ? XDP_PASS : XDP_DROP;
+    }
 
-    // 5. ICMP: fallback to wildcard icmp_type = 0
     if (protocol == IPPROTO_ICMP) {
-    return XDP_PASS;
-}
+        bpf_printk("CHECK ICMP - PROTO=%d TYPE=%d\n", protocol);
+        create_lookup_key(&lookup_key, 0, 0, 0, 0, protocol);
+        value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
+        if (value) {
+            bpf_printk("FOUND ICMP\n");
+            return value->action ? XDP_PASS : XDP_DROP;
+        }
+    }
 
     // 6. TCP/UDP: ports any
     if (protocol == IPPROTO_TCP || protocol == IPPROTO_UDP) {
-        create_lookup_key(&lookup_key, 0, 0, 0, dst_port, protocol, 0);
+        create_lookup_key(&lookup_key, 0, 0, 0, dst_port, protocol);
         value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
         if (value)
             return value->action ? XDP_PASS : XDP_DROP;
 
-        create_lookup_key(&lookup_key, 0, 0, 0, 0, protocol, 0);
+        create_lookup_key(&lookup_key, 0, 0, 0, 0, protocol);
         value = bpf_map_lookup_elem(&inbound_rules, &lookup_key);
         if (value)
             return value->action ? XDP_PASS : XDP_DROP;

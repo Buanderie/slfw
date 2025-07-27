@@ -1,9 +1,9 @@
 firewall:
   interfaces:
-    - name: lo
+    - name: eth0
       type: physical
       enabled: true
-
+      xdp_attach_mode: skb
       inbound:
         default_policy: DROP
         rules:
@@ -12,7 +12,6 @@ firewall:
             destination_ip: any
             source_port: any
             destination_port: any
-            icmp_type: 0        # <- important : signifie "tous les types"
             action: ACCEPT
             description: "Autorise tous les paquets ICMP (ping, etc.)"
 

@@ -4,7 +4,7 @@
 all: generate firewall
 
 generate:
-	go generate ./...
+	go generate 
 
 firewall: main.go
 	go build -o firewall
