@@ -1,0 +1,85 @@
+# Firewall settings configuration
+firewall:
+  interfaces:
+    - name: lo
+      type: external
+      enabled: true
+      inbound:
+        default_policy: DROP
+        rules:
+          # TCP inbound rules for eth0
+          - protocol: tcp
+            source_ip: any
+            destination_ip: 192.168.1.100
+            source_port: any
+            destination_port: 80
+            action: ACCEPT
+            description: Allow inbound HTTP traffic to server on eth0
+          - protocol: tcp
+            source_ip: any
+            destination_ip: 192.168.1.100
+            source_port: any
+            destination_port: 22
+            action: ACCEPT
+            description: Allow inbound SSH to server on eth0
+          # UDP inbound rules for eth0
+          - protocol: udp
+            source_ip: any
+            destination_ip: any
+            source_port: any
+            destination_port: 53
+            action: ACCEPT
+            description: Allow inbound DNS queries on eth0
+          # ICMP inbound rules for eth0
+          - protocol: icmp
+            source_ip: any
+            destination_ip: any
+            icmp_type: 8
+            action: ACCEPT
+            description: Allow inbound ping requests on eth0
+          # Block specific IP inbound on eth0
+          - protocol: all
+            source_ip: 203.0.113.0/24
+            destination_ip: any
+            source_port: any
+            destination_port: any
+            action: DROP
+            description: Block inbound traffic from suspicious subnet on eth0
+      outbound:
+        default_policy: ACCEPT
+        rules:
+          # TCP outbound rules for eth0
+          - protocol: tcp
+            source_ip: any
+            destination_ip: any
+            source_port: any
+            destination_port: 80
+            action: ACCEPT
+            description: Allow outbound HTTP traffic on eth0
+          - protocol: tcp
+            source_ip: any
+            destination_ip: any
+            source_port: any
+            destination_port: 443
+            action: ACCEPT
+            description: Allow outbound HTTPS traffic on eth0
+          # UDP outbound rules for eth0
+          - protocol: udp
+            source_ip: any
+            destination_ip: any
+            source_port: any
+            destination_port: 53
+            action: ACCEPT
+            description: Allow outbound DNS queries on eth0
+          # ICMP outbound rules for eth0
+          - protocol: icmp
+            source_ip: any
+            destination_ip: any
+            icmp_type: 8
+            action: ACCEPT
+            description: Allow outbound ping requests on eth0
+    
+  logging:
+    enabled: true
+    level: info
+    log_blocked: true
