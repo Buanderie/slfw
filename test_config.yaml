@@ -16,5 +16,12 @@ firewall:
             description: "Autorise tous les paquets ICMP (ping, etc.)"
 
       outbound:
-        default_policy: ACCEPT
-        rules: []
+        default_policy: DROP
+        rules:
+          - protocol: icmp
+            source_ip: any
+            destination_ip: any
+            source_port: any
+            destination_port: any
+            action: DROP
+            description: "Autorise tous les paquets ICMP (ping, etc.)"
