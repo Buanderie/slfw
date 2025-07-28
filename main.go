@@ -4,26 +4,29 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"log"
 	"os"
 	"unsafe"
 	"strings"
+	// "os/exec"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	// "github.com/jsimonetti/rtnetlink"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v2"
 )
 
-//go:generate bpf2go -cc clang -cflags "-O2 -g -Wall -I/usr/include/x86_64-linux-gnu" InboundBPF ./bpf/inbound.c
-//go:generate bpf2go -cc clang -cflags "-O2 -g -Wall -I/usr/include/x86_64-linux-gnu" OutboundBPF ./bpf/outbound.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -cflags "-O2 -g -Wall -I/usr/include/x86_64-linux-gnu" InboundBPF ./bpf/inbound.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -cflags "-O2 -g -Wall -I/usr/include/x86_64-linux-gnu" OutboundBPF ./bpf/outbound.c
 
 type Rule struct {
-	Protocol        string `yaml:"protocol"`
-	SourceIP        string `yaml:"source_ip"`
-	DestinationIP   string `yaml:"destination_ip"`
-	SourcePort      string `yaml:"source_port"`
-	DestinationPort string `yaml:"destination_port"`
+	Protocol        string `default:"any" yaml:"protocol"`
+	SourceIP        string `default:"any" yaml:"source_ip"`
+	DestinationIP   string `dfault:"any" yaml:"destination_ip"`
+	SourcePort      string `default:"any" yaml:"source_port"`
+	DestinationPort string `default:"any" yaml:"destination_port"`
 	Action          string `yaml:"action"`
 	Description     string `yaml:"description"`
 }
@@ -281,38 +284,99 @@ func main() {
 		// Attach inbound program (XDP)
 		xdpLink, err := link.AttachXDP(xdpOptions)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Cannot attach XDP program to %s: %v\n", iface.Name, err)
-			fmt.Fprintf(os.Stderr, "Trying to use TC ingress as fallback...\n")
-			
-			// Fallback: utiliser TC ingress pour inbound
-			qdisc := &netlink.GenericQdisc{
-				QdiscAttrs: netlink.QdiscAttrs{
-					LinkIndex: iface_link.Attrs().Index,
-					Handle:    netlink.MakeHandle(0xffff, 0),
-					Parent:    netlink.HANDLE_CLSACT,
-				},
-				QdiscType: "clsact",
-			}
-			netlink.QdiscAdd(qdisc) // Ignorer l'erreur si existe déjà
 
-			// Attacher en ingress (inbound)
-			filter := &netlink.BpfFilter{
-				FilterAttrs: netlink.FilterAttrs{
-					LinkIndex: iface_link.Attrs().Index,
-					Parent:    netlink.HANDLE_MIN_INGRESS,
-					Handle:    1,
-					Protocol:  unix.ETH_P_ALL,
-				},
-				Fd:           inboundProg.FD(),
-				Name:         "tc_firewall_inbound",
-				DirectAction: true,
-			}
+			fmt.Fprintf(os.Stderr, "Warning: Cannot attach XDP program to %s: %v\n", iface.Name, err)
+			fmt.Fprintf(os.Stderr, "Trying to use OLD METHOD ingress as fallback...\n")
 			
-			if err := netlink.FilterAdd(filter); err != nil {
-				fmt.Fprintf(os.Stderr, "Error attaching TC ingress program to %s: %v\n", iface.Name, err)
-				continue
+			// // Fallback: utiliser TC ingress pour inbound
+			// qdisc := &netlink.GenericQdisc{
+			// 	QdiscAttrs: netlink.QdiscAttrs{
+			// 		LinkIndex: iface_link.Attrs().Index,
+			// 		Handle:    netlink.MakeHandle(0xffff, 0),
+			// 		Parent:    netlink.HANDLE_CLSACT,
+			// 	},
+			// 	QdiscType: "clsact",
+			// }
+			// netlink.QdiscAdd(qdisc) // Ignorer l'erreur si existe déjà
+
+			// // Attacher en ingress (inbound)
+			// filter := &netlink.BpfFilter{
+			// 	FilterAttrs: netlink.FilterAttrs{
+			// 		LinkIndex: iface_link.Attrs().Index,
+			// 		Parent:    netlink.HANDLE_MIN_INGRESS,
+			// 		Handle:    1,
+			// 		Protocol:  unix.ETH_P_ALL,
+			// 	},
+			// 	Fd:           inboundProg.FD(),
+			// 	Name:         "tc_firewall_inbound",
+			// 	DirectAction: true,
+			// }
+			
+			// if err := netlink.FilterAdd(filter); err != nil {
+			// 	fmt.Fprintf(os.Stderr, "Error attaching TC ingress program to %s: %v\n", iface.Name, err)
+			// 	continue
+			// }
+
+			// Get the file descriptor of the BPF program
+			progFD := inboundProg.FD()
+			if progFD < 0 {
+				log.Fatalf("Invalid BPF program file descriptor")
 			}
-			fmt.Printf("Successfully attached TC ingress filter to %s\n", iface.Name)
+		
+			// Step 2: Get the network interface using netlink
+			ifaceName := iface.Name // Replace with your interface name
+			link, err := netlink.LinkByName(ifaceName)
+			if err != nil {
+				log.Fatalf("Failed to find interface %s: %v", ifaceName, err)
+			}
+		
+			// Defer detach function to ensure the XDP program is detached on exit
+			defer func() {
+				err := netlink.LinkSetXdpFd(link, -1)
+				if err != nil {
+					log.Printf("Failed to detach XDP program from interface %s: %v", ifaceName, err)
+				} else {
+					fmt.Printf("Successfully detached XDP program from interface %s\n", ifaceName)
+				}
+			}()
+
+			// Step 3: Attach the BPF program to the interface using netlink
+			err = netlink.LinkSetXdpFd(link, progFD)
+			if err != nil {
+				log.Fatalf("Failed to attach XDP program to interface %s: %v", ifaceName, err)
+			}
+		
+			fmt.Printf("Successfully attached XDP program to interface %s\n", ifaceName)
+
+			// // Attach XDP program using ip command
+			// var xdpMode string
+			// switch strings.ToLower(iface.XDPAttachMode) {
+			// case "drv":
+			// 	xdpMode = "xdp"
+			// case "skb":
+			// 	xdpMode = "xdpgeneric"
+			// case "hw":
+			// 	xdpMode = "xdpoffload"
+			// default:
+			// 	xdpMode = "xdp" // Try native, fallback to generic
+			// }
+			
+			// cmd := exec.Command("ip", "link", "set", "dev", iface.Name, xdpMode, "obj", "inbound.o", "sec", "xdp_firewall")
+			// if err := cmd.Run(); err != nil {
+			// 	fmt.Fprintf(os.Stderr, "Error attaching XDP program to %s: %v\n", iface.Name, err)
+			// 	// Try generic mode as fallback
+			// 	cmd = exec.Command("ip", "link", "set", "dev", iface.Name, "xdpgeneric", "obj", "inbound.o", "sec", "xdp_firewall")
+			// 	if err := cmd.Run(); err != nil {
+			// 		fmt.Fprintf(os.Stderr, "Error attaching XDP program in generic mode to %s: %v\n", iface.Name, err)
+			// 		continue
+			// 	}
+			// 	fmt.Printf("Successfully attached XDP program (generic mode) to %s\n", iface.Name)
+			// } else {
+			// 	fmt.Printf("Successfully attached XDP program (%s mode) to %s\n", xdpMode, iface.Name)
+			// }
+
+			// fmt.Printf("OLD_METHOD Successfully attached ingress filter to %s\n", iface.Name)
+
 		} else {
 			defer xdpLink.Close()
 			fmt.Printf("Successfully attached XDP program to %s\n", iface.Name)
@@ -487,6 +551,8 @@ func main() {
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Error parsing destination IP %s: %v\n", rule.DestinationIP, err)
 					continue
+				} else {
+					fmt.Fprintf(os.Stderr, "=> Destination IP %d\n", key.DstIP)
 				}
 				key.SrcPort, err = parsePort(rule.SourcePort)
 				if err != nil {
@@ -508,6 +574,9 @@ func main() {
 					fmt.Fprintf(os.Stderr, "Unknown action: %s\n", rule.Action)
 					continue
 				}
+
+				fmt.Printf("  Final key: SrcIP=%d, DstIP=%d, SrcPort=%d, DstPort=%d, Proto=%d\n",
+				key.SrcIP, key.DstIP, key.SrcPort, key.DstPort, key.Protocol)
 
 				if err := outboundMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&value), ebpf.UpdateAny); err != nil {
 					fmt.Fprintf(os.Stderr, "Error updating outbound map: %v\n", err)

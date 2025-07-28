@@ -34,7 +34,7 @@ struct rule_value {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1000);
+    __uint(max_entries, 32);
     __type(key, struct rule_key);
     __type(value, struct rule_value);
 } inbound_rules SEC(".maps");
@@ -65,7 +65,7 @@ static __always_inline void create_lookup_key(struct rule_key *key,
 SEC("xdp")
 int xdp_firewall_inbound(struct xdp_md *ctx) {
 
-    bpf_printk("XDP SBOOB program loaded and running\n");
+    // bpf_printk("XDP SBOOB program loaded and running\n");
 
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
@@ -104,7 +104,7 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
             return XDP_PASS;
         src_port = __constant_ntohs(tcp->source);
         dst_port = __constant_ntohs(tcp->dest);
-        bpf_printk("--- TCP\n");
+        // bpf_printk("[IN] --- TCP\n");
     } else if (protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)ip + ip->ihl * 4;
         if ((void *)udp + sizeof(*udp) > data_end)
