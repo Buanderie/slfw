@@ -231,7 +231,7 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
 
         // 4. ANY ANY
         bpf_printk("ANY ANY\n");
-        create_lookup_key(&lookup_key, 0, 0, 0, 0, protocol);
+        create_lookup_key(&lookup_key, 0, dst_ip, 0, 0, protocol);
         value = bpf_map_lookup_elem(&outbound_rules, &lookup_key);
         if (value) {
             bpf_printk("value_ICMP !!!!! %d\n", value->action);
