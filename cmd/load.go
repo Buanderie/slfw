@@ -73,7 +73,8 @@ rules along with default policies.`,
 		
 		success("Firewall rules applied to interface %s\n", iface)
 		info("Firewall is running. Press Ctrl+C to stop.\n")
-		select {}
+
+		return nil
 	},
 }
 
