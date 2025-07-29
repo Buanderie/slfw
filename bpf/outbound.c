@@ -9,11 +9,13 @@
 #include <bpf/bpf_helpers.h>
 #include "filter.h"
 
+#define MAX_RULES 512
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, firewall_rule_t);
-    __uint(max_entries, 1024);
+    __uint(max_entries, MAX_RULES);
 } outbound_rules SEC(".maps");
 
 struct {
@@ -23,81 +25,14 @@ struct {
     __uint(max_entries, 1);
 } outbound_default_policy SEC(".maps");
 
-// Helper to parse IP string (e.g., "192.168.1.1" or "192.168.1.0/24")
-static inline int parse_ip_str(const char *ip_str, __u32 *ip_addr, __u32 *mask) {
-    __u32 addr = 0;
-    __u32 bits = 32;
-    int i, j = 0;
-    int num = 0;
-
-    // Simple parsing for "xxx.xxx.xxx.xxx" or "xxx.xxx.xxx.xxx/yy"
-    for (i = 0; i < 46 && ip_str[i]; i++) {
-        if (ip_str[i] >= '0' && ip_str[i] <= '9') {
-            num = num * 10 + (ip_str[i] - '0');
-        } else if (ip_str[i] == '.' && j < 3) {
-            addr = (addr << 8) | (num & 0xff);
-            num = 0;
-            j++;
-        } else if (ip_str[i] == '/') {
-            addr = (addr << 8) | (num & 0xff);
-            num = 0;
-            i++;
-            for (; i < 46 && ip_str[i]; i++) {
-                num = num * 10 + (ip_str[i] - '0');
-            }
-            bits = num;
-            break;
-        }
+static inline firewall_rule_t *check_rule(__u32 rule_idx) {
+    firewall_rule_t *rule = bpf_map_lookup_elem(&outbound_rules, &rule_idx);
+    if (!rule || rule->used == 0) {
+        // bpf_printk("UNK RULE idx=%d\n", rule_idx);
+        return NULL;
     }
-    if (j == 3 && !ip_str[i]) {
-        addr = (addr << 8) | (num & 0xff);
-    }
-
-    *ip_addr = addr;
-    *mask = ~((1ULL << (32 - bits)) - 1);
-    return ip_str[0] == 'a' && ip_str[1] == 'n' && ip_str[2] == 'y' ? 0 : 1; // 0 for "any"
-}
-
-// Helper to match IP against rule's IP
-// static inline int match_ip(__u32 pkt_ip, const char *rule_ip) {
-//     if (rule_ip[0] == 'a' && rule_ip[1] == 'n' && rule_ip[2] == 'y') {
-//         return 1; // Match any IP
-//     }
-//     __u32 rule_addr, mask;
-//     if (parse_ip_str(rule_ip, &rule_addr, &mask) == 0) {
-//         return 1; // "any"
-//     }
-//     return (pkt_ip & mask) == (rule_addr & mask);
-// }
-
-// Helper to match protocol
-static inline int match_protocol(__u8 pkt_proto, const char *rule_proto) {
-    if (rule_proto[0] == 'a' && rule_proto[1] == 'n' && rule_proto[2] == 'y') {
-        return 1; // Match any protocol
-    }
-    if (pkt_proto == IPPROTO_TCP && rule_proto[0] == 't' && rule_proto[1] == 'c' && rule_proto[2] == 'p') {
-        return 1;
-    }
-    if (pkt_proto == IPPROTO_UDP && rule_proto[0] == 'u' && rule_proto[1] == 'd' && rule_proto[2] == 'p') {
-        return 1;
-    }
-    if (pkt_proto == IPPROTO_ICMP && rule_proto[0] == 'i' && rule_proto[1] == 'c' && rule_proto[2] == 'm' && rule_proto[3] == 'p') {
-        return 1;
-    }
-    return 0;
-}
-
-// Helper to match port (or skip for ICMP)
-static inline int match_port(__u16 pkt_port, firewall_rule_t *rule) {
-    if (rule->protocol[0] == 'i' && rule->protocol[1] == 'c' && rule->protocol[2] == 'm' && rule->protocol[3] == 'p') {
-        return 1; // ICMP has no ports, always match
-    }
-    if (rule->has_port_range) {
-        int start = rule->port_info.port_range.start;
-        int end = rule->port_info.port_range.end;
-        return pkt_port >= start && pkt_port <= end;
-    }
-    return pkt_port == rule->port_info.port || rule->port_info.port == 0;
+    // bpf_printk("FOUND RULE idx=%d used=%d IP=%u\n", rule_idx, rule->used, rule->ip);
+    return rule;
 }
 
 SEC("tc")
@@ -113,13 +48,13 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
 
     // Check for IPv4
     if (eth->h_proto != __constant_htons(ETH_P_IP)) {
-        return TC_ACT_OK; // Non-IPv4, pass to default policy
+        return TC_ACT_OK; // Non-IPv4, pass
     }
 
     // Parse IP header
     struct iphdr *ip = data + sizeof(*eth);
     if ((void *)ip + sizeof(*ip) > data_end) {
-        return TC_ACT_OK;
+        return TC_ACT_OK; // Malformed packet
     }
 
     __u16 src_port = 0;
@@ -137,39 +72,71 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
         }
         src_port = __constant_ntohs(udp->source);
     } else if (ip->protocol != IPPROTO_ICMP) {
-        return TC_ACT_OK; // Unknown protocol, pass to default policy
+        return TC_ACT_OK; // Unknown protocol, pass
     }
 
     // Iterate over rules
-    for (__u32 i = 0; i < 1024; i++) {
-        firewall_rule_t *rule;
-        rule = bpf_map_lookup_elem(&outbound_rules, &i);
+    for (__u32 i = 0; i < MAX_RULES; i++) {
+        firewall_rule_t *rule = check_rule(i);
         if (!rule) {
-            continue; // Skip empty or invalid slots
+            continue;
         }
 
-        // Match protocol, source IP, and source port
-        if (match_protocol(ip->protocol, rule->protocol) &&
-            // match_ip(__constant_ntohl(ip->saddr), rule->ip) &&
-            match_port(src_port, rule)) {
-            // if (rule.action[0] == 'a' && rule.action[1] == 'l' && rule.action[2] == 'l' && rule.action[3] == 'o' && rule.action[4] == 'w') {
-            //     return TC_ACT_OK; // Allow
-            // } else {
-            //     return TC_ACT_SHOT; // Block
-            // }
+        // Check if rule is enabled
+        if (!rule->enabled) {
+            continue;
+        }
+
+        // Match protocol (0 means any protocol)
+        if (rule->protocol != 0 && rule->protocol != ip->protocol) {
+            continue;
+        }
+
+        // Match source IP (0 means any IP)
+        if (rule->ip != 0) {
+            __u32 src_ip = __constant_ntohl(ip->daddr);
+            if ((src_ip & rule->netmask) != (rule->ip & rule->netmask)) {
+                continue;
+            }
+        }
+
+        // Match port for TCP/UDP (no port check for ICMP)
+        if (ip->protocol != IPPROTO_ICMP) {
+            if (rule->has_port_range) {
+                // Check port range
+                __u16 start = rule->port_info.port_range.start;
+                __u16 end = rule->port_info.port_range.end;
+                if (src_port < start || src_port > end) {
+                    continue;
+                }
+            } else {
+                // Check single port (0 means any port)
+                if (rule->port_info.port != 0 && rule->port_info.port != src_port) {
+                    continue;
+                }
+            }
+        }
+
+        // Rule matches, apply action
+        bpf_printk("[OUT] MATCH RULE [ %s ] idx=%d action=%d\n", rule->rule_name, i, rule->action);
+        if (rule->action == POLICY_ACCEPT) {
             return TC_ACT_OK;
         }
+        return TC_ACT_SHOT;
     }
 
     // Apply default policy
-    // __u32 key = 0;
-    // __u8 default_action = POLICY_DROP; // Default to DROP
-    // bpf_map_lookup_elem(&outbound_default_policy, &key, &default_action);
-    // if (default_action == POLICY_ACCEPT) {
-    //     return TC_ACT_OK;
-    // }
-    // return TC_ACT_SHOT;
-    return TC_ACT_OK;
+    __u32 key = 0;
+    __u8 default_action = POLICY_DROP; // Default to DROP
+    __u8 *policy = bpf_map_lookup_elem(&outbound_default_policy, &key);
+    if (policy) {
+        default_action = *policy;
+    }
+    // bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
+    if (default_action == POLICY_ACCEPT) {
+        return TC_ACT_OK;
+    }
+    return TC_ACT_SHOT;
 }
 
 char _license[] SEC("license") = "GPL";

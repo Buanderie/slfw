@@ -20,8 +20,8 @@ import (
 
 // PortRange represents a range of ports
 type PortRange struct {
-	Start int32 `yaml:"start"`
-	End   int32 `yaml:"end"`
+	Start uint16 `yaml:"start"`
+	End   uint16 `yaml:"end"`
 }
 
 // FirewallRule represents the firewall_rule_t struct for YAML parsing
@@ -30,22 +30,24 @@ type FirewallRule struct {
 	Action      string     `yaml:"action"`
 	Protocol    string     `yaml:"protocol"`
 	IP          string     `yaml:"ip"`
-	HasPortRange int32      `yaml:"-"` // Set programmatically
-	PortInfo     [8]byte    `yaml:"-"` // Union: port (int32) or port_range (start, end as int32)
-	Description  string     `yaml:"description"`
-	PortRange    *PortRange `yaml:"port_range"` // Used for parsing
-	Port         string     `yaml:"port"`       // Used for parsing
+	PortRange   *PortRange `yaml:"port_range"` // Used for parsing
+	Port        string     `yaml:"port"`       // Used for parsing
+	Description string     `yaml:"description"`
 }
 
 // RuleValue represents the firewall_rule_t struct for eBPF map
 type RuleValue struct {
-	RuleName    [128]byte
-	Action      [16]byte
-	Protocol    [16]byte
-	IP          [46]byte
-	HasPortRange int32
-	PortInfo     [8]byte
-	Description  [256]byte
+    RuleName     [128]byte // char rule_name[128]
+    Action       uint8     // __u8
+    _            [1]byte   // padding for alignment
+    Protocol     uint16    // __u16
+    IP           uint32    // __u32
+    Netmask      uint32    // __u32
+    HasPortRange uint8     // __u8
+    _            [1]byte   // padding for alignment
+    PortInfo     [4]byte   // union { __u16 port; port_range_t port_range; }
+    Used         uint8     // __u8
+    Enabled      uint8     // __u8
 }
 
 // FirewallConfig represents the top-level firewall configuration
@@ -59,28 +61,38 @@ type FirewallConfig struct {
 // eBPF map structures
 type RuleKey uint32 // Array index
 
-func parseIPWithCIDR(ipStr string) (string, error) {
+func parseIPWithCIDR(ipStr string) (uint32, uint32, error) {
 	if ipStr == "any" {
-		return ipStr, nil
+		return 0, 0, nil
 	}
 	if ip := net.ParseIP(ipStr); ip != nil {
 		if ip.To4() == nil {
-			return "", fmt.Errorf("only IPv4 is supported")
+			return 0, 0, fmt.Errorf("only IPv4 is supported")
 		}
-		return ipStr, nil // Single IP
+		// Convert to uint32 (big-endian)
+		ip4 := ip.To4()
+		ipInt := uint32(ip4[0])<<24 | uint32(ip4[1])<<16 | uint32(ip4[2])<<8 | uint32(ip4[3])
+		return ipInt, 0xFFFFFFFF, nil // Single IP, full mask
 	}
-	_, _, err := net.ParseCIDR(ipStr)
+	_, ipNet, err := net.ParseCIDR(ipStr)
 	if err != nil {
-		return "", fmt.Errorf("invalid IP/CIDR %s: %v", ipStr, err)
+		return 0, 0, fmt.Errorf("invalid IP/CIDR %s: %v", ipStr, err)
 	}
-	return ipStr, nil
+	ip4 := ipNet.IP.To4()
+	if ip4 == nil {
+		return 0, 0, fmt.Errorf("only IPv4 CIDR is supported")
+	}
+	ipInt := uint32(ip4[0])<<24 | uint32(ip4[1])<<16 | uint32(ip4[2])<<8 | uint32(ip4[3])
+	ones, _ := ipNet.Mask.Size()
+	mask := uint32((1<<uint(ones) - 1) << uint(32-ones))
+	return ipInt, mask, nil
 }
 
-func parsePort(portStr string) (int32, error) {
+func parsePort(portStr string) (uint16, error) {
 	if portStr == "" || portStr == "any" {
 		return 0, nil
 	}
-	var port int32
+	var port uint16
 	_, err := fmt.Sscanf(portStr, "%d", &port)
 	if err != nil {
 		return 0, fmt.Errorf("invalid port %s: %v", portStr, err)
@@ -89,6 +101,22 @@ func parsePort(portStr string) (int32, error) {
 		return 0, fmt.Errorf("port %s out of range (0-65535)", portStr)
 	}
 	return port, nil
+}
+
+func parseProtocol(protocolStr string) (uint16, error) {
+	protocolStr = strings.ToLower(protocolStr)
+	switch protocolStr {
+	case "tcp":
+		return unix.IPPROTO_TCP, nil
+	case "udp":
+		return unix.IPPROTO_UDP, nil
+	case "icmp":
+		return unix.IPPROTO_ICMP, nil
+	case "any":
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("unsupported protocol: %s", protocolStr)
+	}
 }
 
 func loadConfig(filePath string) (*FirewallConfig, error) {
@@ -120,9 +148,9 @@ func loadConfig(filePath string) (*FirewallConfig, error) {
 // setDefaultPolicy updates the default policy map with the specified policy
 func setDefaultPolicy(policyMap *ebpf.Map, policy string, direction string) error {
 	var defaultKey uint32 = 0
-	defaultAction := uint8(0) // DROP
+	defaultAction := uint8(0) // POLICY_DROP
 	if strings.ToUpper(policy) == "ACCEPT" {
-		defaultAction = 1
+		defaultAction = 1 // POLICY_ACCEPT
 	}
 	if err := policyMap.Update(unsafe.Pointer(&defaultKey), unsafe.Pointer(&defaultAction), ebpf.UpdateAny); err != nil {
 		return fmt.Errorf("error setting %s default policy: %v", direction, err)
@@ -133,78 +161,88 @@ func setDefaultPolicy(policyMap *ebpf.Map, policy string, direction string) erro
 
 // processRules populates the specified eBPF map with rules
 func processRules(rules []FirewallRule, ruleMap *ebpf.Map, direction string, ifaceName string) error {
-	fmt.Printf("Loading %d %s rules for interface %s...\n", len(rules), direction, ifaceName)
-	for i, rule := range rules {
-		fmt.Printf("Processing %s rule %d: %s %s:%v (%s)\n",
-			direction, i+1, rule.Protocol, rule.IP, rule.Port, rule.Action)
+    fmt.Printf("Loading %d %s rules for interface %s...\n", len(rules), direction, ifaceName)
+    for i, rule := range rules {
+        fmt.Printf("Processing %s rule %d: %s %s:%v (%s)\n",
+            direction, i+1, rule.Protocol, rule.IP, rule.Port, rule.Action)
 
-		var value RuleValue
-		if len(rule.RuleName) > len(value.RuleName) {
-			return fmt.Errorf("rule_name too long in %s rule %s: %s", direction, rule.RuleName, rule.RuleName)
-		}
-		if len(rule.Action) > len(value.Action) {
-			return fmt.Errorf("action too long in %s rule %s: %s", direction, rule.RuleName, rule.Action)
-		}
-		if len(rule.Protocol) > len(value.Protocol) {
-			return fmt.Errorf("protocol too long in %s rule %s: %s", direction, rule.RuleName, rule.Protocol)
-		}
-		if len(rule.Description) > len(value.Description) {
-			return fmt.Errorf("description too long in %s rule %s: %s", direction, rule.RuleName, rule.Description)
-		}
-		copy(value.RuleName[:], []byte(rule.RuleName))
-		copy(value.Action[:], []byte(strings.ToLower(rule.Action)))
-		protocol := strings.ToLower(rule.Protocol)
-		copy(value.Protocol[:], []byte(protocol))
-		ipStr, err := parseIPWithCIDR(rule.IP)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing IP in %s rule %s: %v\n", direction, rule.RuleName, err)
-			continue
-		}
-		if len(ipStr) > len(value.IP) {
-			fmt.Fprintf(os.Stderr, "IP too long in %s rule %s: %s\n", direction, rule.RuleName, ipStr)
-			continue
-		}
-		copy(value.IP[:], []byte(ipStr))
+        var value RuleValue
+        if len(rule.RuleName) > len(value.RuleName) {
+            return fmt.Errorf("rule_name too long in %s rule %s: %s", direction, rule.RuleName, rule.RuleName)
+        }
+        copy(value.RuleName[:], []byte(rule.RuleName))
 
-		// Skip port parsing for ICMP
-		if protocol == "icmp" {
-			if rule.Port != "" || rule.PortRange != nil {
-				fmt.Fprintf(os.Stderr, "Error: port or port_range specified for ICMP in %s rule %s\n", direction, rule.RuleName)
-				continue
-			}
-			value.HasPortRange = 0
-			*(*int32)(unsafe.Pointer(&value.PortInfo[0])) = 0
-		} else if rule.PortRange != nil {
-			if rule.Port != "" {
-				fmt.Fprintf(os.Stderr, "Error: both port and port_range specified in %s rule %s\n", direction, rule.RuleName)
-				continue
-			}
-			if rule.PortRange.Start < 0 || rule.PortRange.End > 65535 || rule.PortRange.Start > rule.PortRange.End {
-				fmt.Fprintf(os.Stderr, "Invalid port range in %s rule %s: %d-%d\n", direction, rule.RuleName, rule.PortRange.Start, rule.PortRange.End)
-				continue
-			}
-			value.HasPortRange = 1
-			*(*int32)(unsafe.Pointer(&value.PortInfo[0])) = rule.PortRange.Start
-			*(*int32)(unsafe.Pointer(&value.PortInfo[4])) = rule.PortRange.End
-		} else {
-			port, err := parsePort(rule.Port)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error parsing port in %s rule %s: %v\n", direction, rule.RuleName, err)
-				continue
-			}
-			value.HasPortRange = 0
-			*(*int32)(unsafe.Pointer(&value.PortInfo[0])) = port
-		}
-		copy(value.Description[:], []byte(rule.Description))
+        // Set action
+        if strings.ToLower(rule.Action) == "allow" {
+            value.Action = 1 // POLICY_ACCEPT
+        } else if strings.ToLower(rule.Action) == "block" {
+            value.Action = 0 // POLICY_DROP
+        } else {
+            fmt.Fprintf(os.Stderr, "Invalid action in %s rule %s: %s\n", direction, rule.RuleName, rule.Action)
+            continue
+        }
 
-		key := RuleKey(i)
-		if err := ruleMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&value), ebpf.UpdateAny); err != nil {
-			fmt.Fprintf(os.Stderr, "Error updating %s map for rule %s: %v\n", direction, rule.RuleName, err)
-			continue
-		}
-		fmt.Printf("  ✓ Added %s rule %s at index %d\n", direction, rule.RuleName, i)
-	}
-	return nil
+        // Set protocol
+        protocolNum, err := parseProtocol(rule.Protocol)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error parsing protocol in %s rule %s: %v\n", direction, rule.RuleName, err)
+            continue
+        }
+        value.Protocol = protocolNum
+
+        // Set IP and netmask
+        ipInt, mask, err := parseIPWithCIDR(rule.IP)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error parsing IP in %s rule %s: %v\n", direction, rule.RuleName, err)
+            continue
+        }
+        value.IP = ipInt
+        value.Netmask = mask
+
+        // Handle port or port range
+        if protocolNum == unix.IPPROTO_ICMP {
+            if rule.Port != "" || rule.PortRange != nil {
+                fmt.Fprintf(os.Stderr, "Error: port or port_range specified for ICMP in %s rule %s\n", direction, rule.RuleName)
+                continue
+            }
+            value.HasPortRange = 0
+            *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = 0
+            *(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = 0
+        } else if rule.PortRange != nil {
+            if rule.Port != "" {
+                fmt.Fprintf(os.Stderr, "Error: both port and port_range specified in %s rule %s\n", direction, rule.RuleName)
+                continue
+            }
+            if rule.PortRange.Start > rule.PortRange.End || rule.PortRange.End > 65535 {
+                fmt.Fprintf(os.Stderr, "Invalid port range in %s rule %s: %d-%d\n", direction, rule.RuleName, rule.PortRange.Start, rule.PortRange.End)
+                continue
+            }
+            value.HasPortRange = 1
+            *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = rule.PortRange.Start
+            *(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = rule.PortRange.End
+        } else {
+            port, err := parsePort(rule.Port)
+            if err != nil {
+                fmt.Fprintf(os.Stderr, "Error parsing port in %s rule %s: %v\n", direction, rule.RuleName, err)
+                continue
+            }
+            value.HasPortRange = 0
+            *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = port
+            *(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = 0 // Clear second half
+        }
+
+        // Set used and enabled flags
+        value.Used = 1
+        value.Enabled = 1
+
+        key := RuleKey(i)
+        if err := ruleMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&value), ebpf.UpdateAny); err != nil {
+            fmt.Fprintf(os.Stderr, "Error updating %s map for rule %s: %v\n", direction, rule.RuleName, err)
+            continue
+        }
+        fmt.Printf("  ✓ Added %s rule %s at index %d\n", direction, rule.RuleName, i)
+    }
+    return nil
 }
 
 func main() {
