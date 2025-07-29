@@ -7,7 +7,7 @@ generate:
 	go generate 
 
 firewall: main.go
-	CGO_ENABLED=0 go build -o firewall
+	CGO_ENABLED=0 GOFLAGS=-buildvcs=false go build -o firewall
 
 clean:
 	rm -f firewall
