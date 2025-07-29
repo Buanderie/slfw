@@ -9,7 +9,7 @@
 #include <bpf/bpf_helpers.h>
 #include "filter.h"
 
-#define MAX_RULES 512
+#define MAX_RULES 16
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
