@@ -1,0 +1,5 @@
+PKGS:
+llvm
+clang
+libc6-dev-i386
+libbpf-dev
