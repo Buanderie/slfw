@@ -8,7 +8,7 @@
 #include <bpf/bpf_helpers.h>
 #include "filter.h"
 
-#define MAX_RULES 512
+#define MAX_RULES 16
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -42,7 +42,7 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
-    // bpf_printk("[IN] Hello\n");
+    bpf_printk("[IN] Hello 2\n");
 
     // Parse Ethernet header
     struct ethhdr *eth = data;
@@ -61,20 +61,20 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
         return XDP_PASS; // Malformed packet
     }
 
-    __u16 src_port = 0;
+    __u16 dst_port = 0;
     // Parse TCP/UDP header for ports
     if (ip->protocol == IPPROTO_TCP) {
         struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
         if ((void *)tcp + sizeof(*tcp) > data_end) {
             return XDP_PASS;
         }
-        src_port = __constant_ntohs(tcp->source);
+        dst_port = __constant_ntohs(tcp->dest);
     } else if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)ip + (ip->ihl * 4);
         if ((void *)udp + sizeof(*udp) > data_end) {
             return XDP_PASS;
         }
-        src_port = __constant_ntohs(udp->source);
+        dst_port = __constant_ntohs(udp->dest);
     } else if (ip->protocol != IPPROTO_ICMP) {
         return XDP_PASS; // Unknown protocol, pass
     }
@@ -98,24 +98,23 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
 
         // Match source IP (0 means any IP)
         if (rule->ip != 0) {
-            __u32 src_ip = __constant_ntohl(ip->daddr);
+            __u32 src_ip = __constant_ntohl(ip->saddr);
             if ((src_ip & rule->netmask) != (rule->ip & rule->netmask)) {
                 continue;
             }
         }
 
         // Match port for TCP/UDP (no port check for ICMP)
+        // Match destination port for TCP/UDP (no port check for ICMP)
         if (ip->protocol != IPPROTO_ICMP) {
             if (rule->has_port_range) {
-                // Check port range
                 __u16 start = rule->port_info.port_range.start;
                 __u16 end = rule->port_info.port_range.end;
-                if (src_port < start || src_port > end) {
+                if (dst_port < start || dst_port > end) {
                     continue;
                 }
             } else {
-                // Check single port (0 means any port)
-                if (rule->port_info.port != 0 && rule->port_info.port != src_port) {
+                if (rule->port_info.port != 0 && rule->port_info.port != dst_port) {
                     continue;
                 }
             }
@@ -136,7 +135,7 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
     if (policy) {
         default_action = *policy;
     }
-    // bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
+    bpf_printk("[IN] APPLY DEFAULT POLICY action=%d\n", default_action);
     if (default_action == POLICY_ACCEPT) {
         return XDP_PASS;
     }
