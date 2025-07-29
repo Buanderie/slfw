@@ -40,6 +40,8 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
 
+    bpf_printk("[OUTOUTIN] Hello\n");
+
     // Parse Ethernet header
     struct ethhdr *eth = data;
     if (data + sizeof(*eth) > data_end) {
@@ -132,7 +134,7 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
     if (policy) {
         default_action = *policy;
     }
-    // bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
+    bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
     if (default_action == POLICY_ACCEPT) {
         return TC_ACT_OK;
     }

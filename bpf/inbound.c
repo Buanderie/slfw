@@ -37,8 +37,12 @@ static inline firewall_rule_t *check_rule(__u32 rule_idx) {
 SEC("xdp")
 int xdp_firewall_inbound(struct xdp_md *ctx) {
     
+    // bpf_printk("[IN] Hello\n");
+
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
+
+    // bpf_printk("[IN] Hello\n");
 
     // Parse Ethernet header
     struct ethhdr *eth = data;
