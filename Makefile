@@ -12,3 +12,4 @@ firewall: main.go
 clean:
 	rm -f firewall
 	rm -rf bpf_firewall_bpf*
+	rm -rf *_bpfe*

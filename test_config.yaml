@@ -1,35 +1,56 @@
-firewall:
-  interfaces:
-    - name: eth0
-      type: physical
-      enabled: true
-      xdp_attach_mode: skb
-      inbound:
-        default_policy: DROP
-        rules:
-          - protocol: icmp
-            source_ip: any
-            destination_ip: any
-            source_port: any
-            destination_port: any
-            action: ACCEPT
-            description: "Autorise tous les paquets ICMP (ping, etc.)"
+  inbound:
+    - rule_name: "block_ssh_inbound"
+      action: "block"
+      protocol: "tcp"
+      ip: "192.168.1.0/24"
+      port: 22
+      description: "Block inbound SSH traffic from local network"
 
-          - protocol: tcp
-            source_ip: any
-            destination_ip: any
-            source_port: any
-            destination_port: 22
-            action: ACCEPT
-            description: "Autorise tous les paquets ICMP (ping, etc.)"
+    - rule_name: "allow_web_inbound"
+      action: "allow"
+      protocol: "tcp"
+      ip: "any"
+      port_range:
+        start: 80
+        end: 443
+      description: "Allow inbound HTTP and HTTPS traffic from any source"
 
-      outbound:
-        default_policy: ACCEPT
-        rules:
-          - protocol: icmp
-            source_ip: any
-            destination_ip: any
-            source_port: any
-            destination_port: any
-            action: DROP
-            description: "Autorise tous les paquets ICMP (ping, etc.)"
+    - rule_name: "allow_icmp_inbound"
+      action: "allow"
+      protocol: "icmp"
+      ip: "any"
+      description: "Allow all inbound ICMP traffic"
+
+    - rule_name: "block_specific_ip_inbound"
+      action: "block"
+      protocol: "any"
+      ip: "203.0.113.5/32"
+      port: "any"
+      description: "Block all inbound traffic from a specific IP"
+
+  outbound:
+    - rule_name: "allow_dns_outbound"
+      action: "allow"
+      protocol: "udp"
+      ip: "8.8.8.8/32"
+      port: 53
+      description: "Allow outbound DNS queries to Google DNS"
+    - rule_name: "block_icmp_outbound"
+      action: "block"
+      protocol: "icmp"
+      ip: "192.168.2.0/24"
+      description: "Block all outbound ICMP traffic to specified network"
+    - rule_name: "allow_smtp_outbound"
+      action: "allow"
+      protocol: "tcp"
+      ip: "any"
+      port: 25
+      description: "Allow outbound SMTP traffic to any destination"
+    - rule_name: "block_specific_port_range_outbound"
+      action: "block"
+      protocol: "tcp"
+      ip: "10.0.0.0/16"
+      port_range:
+        start: 1000
+        end: 2000
+      description: "Block outbound TCP traffic to specific network on ports 1000-2000"
