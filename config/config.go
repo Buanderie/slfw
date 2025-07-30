@@ -34,3 +34,15 @@ func LoadConfig(filePath string) (*FirewallConfig, error) {
 	}
 	return &config, nil
 }
+
+// SerializeFirewallRules serializes a slice of FirewallRule structs to YAML
+func SerializeFirewallConfig(fwConfig FirewallConfig) (string, error) {
+
+	// Serialize to YAML
+	yamlData, err := yaml.Marshal(&fwConfig)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling to YAML: %v", err)
+	}
+
+	return string(yamlData), nil
+}

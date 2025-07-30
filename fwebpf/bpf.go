@@ -219,14 +219,16 @@ func AttachPrograms(ifaceName string, defaultDrop bool) (*ebpf.Collection, link.
 		if err := netlink.LinkSetXdpFd(ifaceLink, progFD); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to attach XDP program to %s: %v", ifaceName, err)
 		}
-		coll.Close()
-		return nil, nil, nil, fmt.Errorf("attaching XDP program to %s: %v", ifaceName, err)
+		// coll.Close()
+		// return nil, nil, nil, fmt.Errorf("attaching XDP program to %s: %v", ifaceName, err)
 	}
-	if err := xdpLink.Pin(filepath.Join(bpfFsPath, "xdp_link")); err != nil {
-		xdpLink.Close()
-		coll.Close()
-		return nil, nil, nil, fmt.Errorf("pinning XDP link: %v", err)
-	}
+
+	// if err := xdpLink.Pin(filepath.Join(bpfFsPath, "xdp_link")); err != nil {
+	// 	xdpLink.Close()
+	// 	coll.Close()
+	// 	return nil, nil, nil, fmt.Errorf("pinning XDP link: %v", err)
+	// }
+
 	fmt.Printf("Successfully attached and pinned XDP program to %s\n", ifaceName)
 
 	// Attach TC program
@@ -306,6 +308,13 @@ func DetachPrograms(ifaceName string) error {
 	}
 	if err := netlink.QdiscDel(qdisc); err != nil && !strings.Contains(err.Error(), "not found") {
 		// Ignore "not found" errors
+	}
+
+	// Detach XDP
+	if err := netlink.LinkSetXdpFd(ifaceLink, -1); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to detach XDP program from %s: %v\n", ifaceName, err)
+	} else {
+		fmt.Printf("Detached XDP program from %s\n", ifaceName)
 	}
 
 	// Remove pinned programs and maps

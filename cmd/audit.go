@@ -22,7 +22,12 @@ between the expected configuration and the actual applied rules.`,
 			return fmt.Errorf("--interface and --config are required")
 		}
 		
-		return rules.AuditRules(iface, configFile)
+		// return rules.AuditRules(iface, configFile)
+		_, err := rules.RetrieveFirewallConfig(iface)
+		if err != nil {
+			return fmt.Errorf("ERROR: %v", err)
+		}
+		return nil
 	},
 }
 

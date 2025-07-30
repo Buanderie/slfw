@@ -12,8 +12,8 @@ type FirewallRule struct {
 	Action      string     `yaml:"action"`
 	Protocol    string     `yaml:"protocol"`
 	IP          string     `yaml:"ip"`
-	PortRange   *PortRange `yaml:"port_range"` // Used for parsing
-	Port        string     `yaml:"port"`       // Used for parsing
+	PortRange   *PortRange `yaml:"port_range,omitempty"` // Used for parsing
+	Port        string     `yaml:"port,omitempty"`       // Used for parsing
 	Description string     `yaml:"description"`
 }
 

@@ -36,47 +36,64 @@ static inline firewall_rule_t *check_rule(__u32 rule_idx) {
 
 SEC("xdp")
 int xdp_firewall_inbound(struct xdp_md *ctx) {
-    
-    // bpf_printk("[IN] Hello\n");
-
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
-    bpf_printk("[IN] Hello 2\n");
+    // Ensure Ethernet header is present
+    if (data + sizeof(struct ethhdr) > data_end) {
+        bpf_printk("Invalid Ethernet header\n");
+        return XDP_PASS;
+    }
 
-    // Parse Ethernet header
     struct ethhdr *eth = data;
-    if (data + sizeof(*eth) > data_end) {
-        return XDP_PASS; // Malformed packet
+    // Explicitly check for h_proto access
+    if ((void *)&eth->h_proto + sizeof(__u16) > data_end) {
+        bpf_printk("Cannot access eth->h_proto\n");
+        return XDP_PASS;
     }
 
     // Check for IPv4
     if (eth->h_proto != __constant_htons(ETH_P_IP)) {
-        return XDP_PASS; // Non-IPv4, pass
+        bpf_printk("Non-IPv4 packet\n");
+        return XDP_PASS;
     }
-    
-    // Parse IP header
-    struct iphdr *ip = data + sizeof(*eth);
-    if ((void *)ip + sizeof(*ip) > data_end) {
-        return XDP_PASS; // Malformed packet
+
+    // Ensure minimum IP header is present
+    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end) {
+        bpf_printk("Invalid IP header\n");
+        return XDP_PASS;
     }
+
+    struct iphdr *ip = data + sizeof(struct ethhdr);
+    // Verify IP header length
+    if (ip->ihl < 5) {
+        bpf_printk("Invalid IP ihl=%d\n", ip->ihl);
+        return XDP_PASS;
+    }
+
+    // Calculate transport header offset
+    __u32 ip_header_len = ip->ihl * 4;
+    void *transport_header = (void *)ip + ip_header_len;
 
     __u16 dst_port = 0;
     // Parse TCP/UDP header for ports
     if (ip->protocol == IPPROTO_TCP) {
-        struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
-        if ((void *)tcp + sizeof(*tcp) > data_end) {
+        if (transport_header + sizeof(struct tcphdr) > data_end) {
+            bpf_printk("Invalid TCP header\n");
             return XDP_PASS;
         }
+        struct tcphdr *tcp = transport_header;
         dst_port = __constant_ntohs(tcp->dest);
     } else if (ip->protocol == IPPROTO_UDP) {
-        struct udphdr *udp = (void *)ip + (ip->ihl * 4);
-        if ((void *)udp + sizeof(*udp) > data_end) {
+        if (transport_header + sizeof(struct udphdr) > data_end) {
+            bpf_printk("Invalid UDP header\n");
             return XDP_PASS;
         }
+        struct udphdr *udp = transport_header;
         dst_port = __constant_ntohs(udp->dest);
     } else if (ip->protocol != IPPROTO_ICMP) {
-        return XDP_PASS; // Unknown protocol, pass
+        bpf_printk("Unsupported protocol=%d\n", ip->protocol);
+        return XDP_PASS;
     }
 
     // Iterate over rules
@@ -104,7 +121,6 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
             }
         }
 
-        // Match port for TCP/UDP (no port check for ICMP)
         // Match destination port for TCP/UDP (no port check for ICMP)
         if (ip->protocol != IPPROTO_ICMP) {
             if (rule->has_port_range) {
@@ -130,17 +146,16 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
 
     // Apply default policy
     __u32 key = 0;
-    __u8 default_action = POLICY_DROP; // Default to DROP
+    __u8 default_action = POLICY_DROP;
     __u8 *policy = bpf_map_lookup_elem(&inbound_default_policy, &key);
     if (policy) {
         default_action = *policy;
     }
-    bpf_printk("[IN] APPLY DEFAULT POLICY action=%d\n", default_action);
+    // bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
     if (default_action == POLICY_ACCEPT) {
         return XDP_PASS;
     }
     return XDP_DROP;
-
 }
 
 char _license[] SEC("license") = "GPL";

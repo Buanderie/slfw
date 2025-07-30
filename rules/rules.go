@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"unsafe"
+	"syscall"
 
 	"firewall/config"
 	"firewall/fwebpf"
@@ -14,6 +15,8 @@ import (
 	"github.com/fatih/color"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+
+	"gopkg.in/yaml.v2"
 )
 
 // Initialize colored output
@@ -348,17 +351,172 @@ func PrintRules(ifaceName string) error {
 	return nil
 }
 
-// AuditRules compares YAML rules with currently applied rules
-func AuditRules(ifaceName, configPath string) error {
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("loading config: %v", err)
+
+// AUDIT UTILS
+// ReverseProcessRules converts RuleValue structs from an eBPF map back into FirewallRule structs
+func ConvertBinaryRuleToFirewallRule(value config.RuleValue) (config.FirewallRule, error) {
+	var rule config.FirewallRule
+
+	// for key, value := range ruleValues {
+		// if value.Used == 0 || value.Enabled == 0 {
+			// continue // Skip unused or disabled rules
+		// }
+
+		// var rule config.FirewallRule
+
+		// Extract rule name (convert [128]byte to string, trimming null bytes)
+		ruleName := string(value.RuleName[:])
+		rule.RuleName = strings.TrimRight(ruleName, "\x00")
+		if rule.RuleName == "" {
+			return rule, fmt.Errorf("invalid empty rule name")
+		}
+
+		// Convert action
+		switch value.Action {
+		case 1: // POLICY_ACCEPT
+			rule.Action = "allow"
+		case 0: // POLICY_DROP
+			rule.Action = "block"
+		default:
+			return rule, fmt.Errorf("invalid action value %d in rule %s", value.Action, rule.RuleName)
+		}
+
+		// Convert protocol
+		protocol, err := ReverseParseProtocol(value.Protocol)
+		if err != nil {
+			return rule, fmt.Errorf("error reversing protocol in rule %s: %v", rule.RuleName, err)
+		}
+		rule.Protocol = protocol
+
+		// Convert IP and netmask
+		ipStr, err := ReverseParseIPWithCIDR(value.IP, value.Netmask)
+		if err != nil {
+			return rule, fmt.Errorf("error reversing IP in rule %s: %v", rule.RuleName, err)
+		}
+		rule.IP = ipStr
+
+		// Convert port or port range
+		if value.Protocol == syscall.IPPROTO_ICMP {
+			if value.HasPortRange != 0 || value.PortInfo[0] != 0 || value.PortInfo[2] != 0 {
+				return rule, fmt.Errorf("invalid port/port range data for ICMP in rule %s", rule.RuleName)
+			}
+			rule.Port = ""
+			rule.PortRange = nil
+		} else if value.HasPortRange == 1 {
+			start := *(*uint16)(unsafe.Pointer(&value.PortInfo[0]))
+			end := *(*uint16)(unsafe.Pointer(&value.PortInfo[2]))
+			if start > end || end > 65535 {
+				return rule, fmt.Errorf("invalid port range %d-%d in rule %s", start, end, rule.RuleName)
+			}
+			rule.PortRange = &config.PortRange{
+				Start: start,
+				End:   end,
+			}
+			rule.Port = ""
+		} else {
+			port := *(*uint16)(unsafe.Pointer(&value.PortInfo[0]))
+			if port == 0 && value.PortInfo[2] != 0 {
+				return rule, fmt.Errorf("invalid port data in rule %s", rule.RuleName)
+			}
+			if port != 0 {
+				rule.Port = fmt.Sprintf("%d", port)
+			} else {
+				rule.Port = "any"
+			}
+			rule.PortRange = nil
+		}
+
+		// Description is not stored in RuleValue, so leave it empty
+		rule.Description = ""
+
+		// rules = append(rules, rule)
+	// }
+
+	return rule, nil
+}
+
+// ReverseParseProtocol converts a protocol number back to its string representation
+func ReverseParseProtocol(protocol uint16) (string, error) {
+	switch protocol {
+	case syscall.IPPROTO_TCP:
+		return "tcp", nil
+	case syscall.IPPROTO_UDP:
+		return "udp", nil
+	case syscall.IPPROTO_ICMP:
+		return "icmp", nil
+	default:
+		return "any", nil
 	}
+}
+
+// ReverseParseIPWithCIDR converts IP and netmask back to CIDR notation
+func ReverseParseIPWithCIDR(ip, netmask uint32) (string, error) {
+	// Convert uint32 IP to net.IP
+	ipBytes := make([]byte, 4)
+	for i := 0; i < 4; i++ {
+		ipBytes[i] = byte(ip >> (24 - 8*i))
+	}
+	netIP := net.IP(ipBytes).To4()
+	if netIP == nil {
+		return "", fmt.Errorf("invalid IP address: %d", ip)
+	}
+
+	// Convert uint32 netmask to net.IPMask
+	maskBytes := make([]byte, 4)
+	for i := 0; i < 4; i++ {
+		maskBytes[i] = byte(netmask >> (24 - 8*i))
+	}
+	ipMask := net.IPMask(maskBytes)
+
+	// Get CIDR prefix length
+	ones, bits := ipMask.Size()
+	if ones == 0 && netmask != 0 {
+		return "", fmt.Errorf("invalid netmask: %d", netmask)
+	}
+	if bits != 32 {
+		return "", fmt.Errorf("invalid netmask bits: %d", bits)
+	}
+
+	return fmt.Sprintf("%s/%d", netIP.String(), ones), nil
+}
+
+// SerializeFirewallRules serializes a slice of FirewallRule structs to YAML
+func SerializeFirewallRules(rule config.FirewallRule) (string, error) {
+	// Create a FirewallConfig to wrap the rules
+	// config := FirewallConfig{
+	// 	Inbound:        []FirewallRule{},
+	// 	Outbound:       []FirewallRule{},
+	// 	InboundPolicy:  "block", // Default policy, can be customized
+	// 	OutboundPolicy: "block", // Default policy, can be customized
+	// }
+
+	// // Assign rules to the appropriate direction
+	// if direction == "inbound" {
+	// 	config.Inbound = rules
+	// } else if direction == "outbound" {
+	// 	config.Outbound = rules
+	// } else {
+	// 	return "", fmt.Errorf("invalid direction: %s, must be 'inbound' or 'outbound'", direction)
+	// }
+
+	// Serialize to YAML
+	yamlData, err := yaml.Marshal(&rule)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling to YAML: %v", err)
+	}
+
+	return string(yamlData), nil
+}
+
+func RetrieveFirewallConfig(ifaceName string) (config.FirewallConfig, error) {
+
+	// Prepare config struct
+	var ifaceConfig config.FirewallConfig
 
 	// Check if programs are attached
 	ifaceLink, err := netlink.LinkByName(ifaceName)
 	if err != nil {
-		return fmt.Errorf("getting interface %s: %v", ifaceName, err)
+		return ifaceConfig, fmt.Errorf("getting interface %s: %v", ifaceName, err)
 	}
 
 	xdpAttached := false
@@ -368,7 +526,7 @@ func AuditRules(ifaceName, configPath string) error {
 
 	filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
 	if err != nil {
-		return fmt.Errorf("listing filters on %s: %v", ifaceName, err)
+		return ifaceConfig, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
 	}
 	tcAttached := false
 	for _, f := range filters {
@@ -387,9 +545,85 @@ func AuditRules(ifaceName, configPath string) error {
 	bpfFsPath := "/sys/fs/bpf/slfw_" + ifaceName
 	coll, err := fwebpf.LoadPinnedCollection(bpfFsPath)
 	if err != nil {
-		return fmt.Errorf("loading pinned eBPF objects from %s: %v", bpfFsPath, err)
+		return ifaceConfig, fmt.Errorf("loading pinned eBPF objects from %s: %v", bpfFsPath, err)
 	}
 	defer coll.Close()
+
+	// Fetch inbound
+	inboundMap := coll.Maps["inbound_rules"]
+	var key config.RuleKey
+	var value config.RuleValue
+	iter := inboundMap.Iterate()
+	for iter.Next(&key, &value) {
+		if value.Used == 0 || value.Enabled == 0 {
+			continue
+		}
+
+		testr, err := ConvertBinaryRuleToFirewallRule(value)
+		if err != nil {
+			return ifaceConfig, fmt.Errorf("Reversing: %v", err)
+		} else {
+			ifaceConfig.Inbound = append(ifaceConfig.Inbound, testr)
+		}
+	}
+
+	// Fetch outbound
+	outboundMap := coll.Maps["outbound_rules"]
+	iter = outboundMap.Iterate()
+	for iter.Next(&key, &value) {
+
+		if value.Used == 0 || value.Enabled == 0 {
+			continue
+		}
+
+		testr, err := ConvertBinaryRuleToFirewallRule(value)
+		if err != nil {
+			return ifaceConfig, fmt.Errorf("Reversing: %v", err)
+		} else {
+			ifaceConfig.Outbound = append(ifaceConfig.Outbound, testr)
+		}
+	}
+
+	// Compare default policies
+	inboundDefaultMap := coll.Maps["inbound_default_policy"]
+	var defaultAction uint8
+	key = 0
+	if err := inboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
+		policy := "DROP"
+		if defaultAction == 1 {
+			policy = "ACCEPT"
+		}
+		ifaceConfig.InboundPolicy = policy
+	} else {
+		return ifaceConfig, fmt.Errorf("loading inbound default policy from %s: %v", ifaceName, err)
+	}
+	
+	outboundDefaultMap := coll.Maps["outbound_default_policy"]
+	if err := outboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
+		policy := "DROP"
+		if defaultAction == 1 {
+			policy = "ACCEPT"
+		}
+		ifaceConfig.OutboundPolicy = policy
+	} else {
+		return ifaceConfig, fmt.Errorf("loading outbound default policy from %s: %v", ifaceName, err)
+	}
+
+	strRet, _ := config.SerializeFirewallConfig(ifaceConfig)
+	fmt.Println(strRet)
+
+	return ifaceConfig, nil
+}
+
+// AuditRules compares YAML rules with currently applied rules
+/*
+func AuditRules(ifaceName, configPath string) error {
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %v", err)
+	}
+
+	
 
 	// Compare inbound rules
 	inboundMap := coll.Maps["inbound_rules"]
@@ -402,6 +636,38 @@ func AuditRules(ifaceName, configPath string) error {
 			continue
 		}
 		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
+		fmt.Println(ruleName)
+
+		// Convert struct to byte slice using unsafe
+		size := unsafe.Sizeof(value)
+		bytes := (*[148]byte)(unsafe.Pointer(&value))[:size:size]
+
+		// Print binary representation of each byte
+		for _, b := range bytes {
+			fmt.Printf("%02x ", b)
+		}
+		fmt.Println()
+
+		// Print hex for each field
+		fmt.Printf("RuleName: %x\n", value.RuleName)
+		fmt.Printf("Action: %02x\n", value.Action)
+		fmt.Printf("Protocol: %04x\n", value.Protocol)
+		fmt.Printf("IP: %08x\n", value.IP)
+		fmt.Printf("Netmask: %08x\n", value.Netmask)
+		fmt.Printf("HasPortRange: %02x\n", value.HasPortRange)
+		fmt.Printf("PortInfo: %x\n", value.PortInfo)
+		fmt.Printf("Used: %02x\n", value.Used)
+		fmt.Printf("Enabled: %02x\n", value.Enabled)
+
+		testr, err := ConvertBinaryRuleToFirewallRule(value)
+		if err != nil {
+			return fmt.Errorf("Reversing: %v", err)
+		} else {
+			fmt.Printf("SBOOB Protocol: %s\n", testr.Protocol)
+			yamlStr, _ := SerializeFirewallRules(testr)
+			fmt.Printf("%s\n", yamlStr)
+		}
+
 		appliedInbound[ruleName] = value
 	}
 
@@ -566,3 +832,4 @@ func AuditRules(ifaceName, configPath string) error {
 	success("No differences found between config and applied rules\n")
 	return nil
 }
+*/

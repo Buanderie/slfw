@@ -1,0 +1,54 @@
+inbound:
+- rule_name: block_ssh_inbound
+  action: allow
+  protocol: tcp
+  ip: 192.168.1.0/24
+  port: "22"
+  description: ""
+- rule_name: allow_web_inbound
+  action: allow
+  protocol: tcp
+  ip: 0.0.0.0/0
+  port_range:
+    start: 80
+    end: 443
+  description: ""
+- rule_name: allow_icmp_inbound
+  action: allow
+  protocol: icmp
+  ip: 192.168.1.12/32
+  description: ""
+- rule_name: block_specific_ip_inbound
+  action: block
+  protocol: any
+  ip: 203.0.113.5/32
+  port: any
+  description: ""
+outbound:
+- rule_name: allow_ssh_outbound
+  action: allow
+  protocol: tcp
+  ip: 192.168.1.0/24
+  port: "22"
+  description: ""
+- rule_name: allow_icmp_outbound
+  action: allow
+  protocol: icmp
+  ip: 0.0.0.0/0
+  description: ""
+- rule_name: allow_smtp_outbound
+  action: allow
+  protocol: tcp
+  ip: 0.0.0.0/0
+  port: "25"
+  description: ""
+- rule_name: block_specific_port_range_outbound
+  action: block
+  protocol: tcp
+  ip: 10.0.0.0/16
+  port_range:
+    start: 1000
+    end: 2000
+  description: ""
+inbound_policy: DROP
+outbound_policy: DROP

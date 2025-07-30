@@ -1,6 +1,7 @@
+  inbound_policy: "DROP"
   inbound:
     - rule_name: "block_ssh_inbound"
-      action: "block"
+      action: "allow"
       protocol: "tcp"
       ip: "192.168.1.0/24"
       port: 22
@@ -18,7 +19,7 @@
     - rule_name: "allow_icmp_inbound"
       action: "allow"
       protocol: "icmp"
-      ip: "any"
+      ip: "192.168.1.12"
       description: "Allow all inbound ICMP traffic"
 
     - rule_name: "block_specific_ip_inbound"
@@ -28,17 +29,18 @@
       port: "any"
       description: "Block all inbound traffic from a specific IP"
 
+  outbound_policy: "DROP"
   outbound:
-    - rule_name: "allow_dns_outbound"
+    - rule_name: "allow_ssh_outbound"
       action: "allow"
-      protocol: "udp"
-      ip: "8.8.8.8/32"
-      port: 53
+      protocol: "tcp"
+      ip: "192.168.1.0/24"
+      port: 22
       description: "Allow outbound DNS queries to Google DNS"
-    - rule_name: "block_icmp_outbound"
-      action: "block"
+    - rule_name: "allow_icmp_outbound"
+      action: "allow"
       protocol: "icmp"
-      ip: "192.168.2.0/24"
+      ip: "any"
       description: "Block all outbound ICMP traffic to specified network"
     - rule_name: "allow_smtp_outbound"
       action: "allow"
