@@ -64,10 +64,10 @@ rules along with default policies.`,
 		if err := rules.SetDefaultPolicy(coll.Maps["outbound_default_policy"], cfg.OutboundPolicy, "outbound"); err != nil {
 			return fmt.Errorf("setting outbound policy: %v", err)
 		}
-		if err := rules.ProcessRules(cfg.Inbound, coll.Maps["inbound_rules"], "inbound", iface); err != nil {
+		if err := rules.ProcessRules(cfg.Inbound, coll.Maps["inbound_rules"], iface); err != nil {
 			return fmt.Errorf("processing inbound rules: %v", err)
 		}
-		if err := rules.ProcessRules(cfg.Outbound, coll.Maps["outbound_rules"], "outbound", iface); err != nil {
+		if err := rules.ProcessRules(cfg.Outbound, coll.Maps["outbound_rules"], iface); err != nil {
 			return fmt.Errorf("processing outbound rules: %v", err)
 		}
 		

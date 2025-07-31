@@ -101,88 +101,91 @@ func SetDefaultPolicy(policyMap *ebpf.Map, policy string, direction string) erro
 	return nil
 }
 
+// TODO
+// FirewallRuleToEBPF converts a FirewallRule to an eBPF RuleValue.
+func FirewallRuleToEBPF(rule config.FirewallRule) (config.RuleValue, error) {
+    var value config.RuleValue
+
+    // Validate rule name length
+    if len(rule.RuleName) > len(value.RuleName) {
+        return value, fmt.Errorf("rule_name too long rule %s: %s", rule.RuleName, rule.RuleName)
+    }
+    copy(value.RuleName[:], []byte(rule.RuleName))
+
+    // Set action
+    if strings.ToLower(rule.Action) == "allow" {
+        value.Action = 1 // POLICY_ACCEPT
+    } else if strings.ToLower(rule.Action) == "block" {
+        value.Action = 0 // POLICY_DROP
+    } else {
+        return value, fmt.Errorf("invalid action rule %s: %s", rule.RuleName, rule.Action)
+    }
+
+    // Set protocol
+    protocolNum, err := ParseProtocol(rule.Protocol)
+    if err != nil {
+        return value, fmt.Errorf("error parsing protocol rule %s: %v", rule.RuleName, err)
+    }
+    value.Protocol = protocolNum
+
+    // Set IP and netmask
+    ipInt, mask, err := ParseIPWithCIDR(rule.IP)
+    if err != nil {
+        return value, fmt.Errorf("error parsing IP in rule %s: %v", rule.RuleName, err)
+    }
+    value.IP = ipInt
+    value.Netmask = mask
+
+    // Handle port or port range
+    if protocolNum == syscall.IPPROTO_ICMP { // or unix.IPPROTO_ICMP
+        if rule.Port != "" || rule.PortRange != nil {
+            return value, fmt.Errorf("error: port or port_range specified for ICMP rule %s", rule.RuleName)
+        }
+        value.HasPortRange = 0
+        *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = 0
+        *(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = 0
+    } else if rule.PortRange != nil {
+        if rule.Port != "" {
+            return value, fmt.Errorf("error: both port and port_range specified in rule %s", rule.RuleName)
+        }
+        if rule.PortRange.Start > rule.PortRange.End || rule.PortRange.End > 65535 {
+            return value, fmt.Errorf("invalid port range in rule %s: %d-%d", rule.RuleName, rule.PortRange.Start, rule.PortRange.End)
+        }
+        value.HasPortRange = 1
+        *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = rule.PortRange.Start
+        *(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = rule.PortRange.End
+    } else {
+        port, err := ParsePort(rule.Port)
+        if err != nil {
+            return value, fmt.Errorf("error parsing port in rule %s: %v", rule.RuleName, err)
+        }
+        value.HasPortRange = 0
+        *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = port
+        *(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = 0 // Clear second half
+    }
+
+    // Set used and enabled flags
+    value.Used = 1
+    value.Enabled = 1
+
+    return value, nil
+}
+
 // ProcessRules populates the specified eBPF map with rules
-func ProcessRules(rules []config.FirewallRule, ruleMap *ebpf.Map, direction string, ifaceName string) error {
-	info("Loading %d %s rules for interface %s...\n", len(rules), direction, ifaceName)
+func ProcessRules(rules []config.FirewallRule, ruleMap *ebpf.Map, ifaceName string) error {
+	info("Loading %d rules for interface %s...\n", len(rules), ifaceName)
 	for i, rule := range rules {
-		info("Processing %s rule %d: %s %s:%v (%s)\n",
-			direction, i+1, rule.Protocol, rule.IP, rule.Port, rule.Action)
-
-		var value config.RuleValue
-		if len(rule.RuleName) > len(value.RuleName) {
-			return fmt.Errorf("rule_name too long in %s rule %s: %s", direction, rule.RuleName, rule.RuleName)
-		}
-		copy(value.RuleName[:], []byte(rule.RuleName))
-
-		// Set action
-		if strings.ToLower(rule.Action) == "allow" {
-			value.Action = 1 // POLICY_ACCEPT
-		} else if strings.ToLower(rule.Action) == "block" {
-			value.Action = 0 // POLICY_DROP
+		bvalue, err := FirewallRuleToEBPF(rule)
+		if err == nil {
+			key := config.RuleKey(i)
+			if err := ruleMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&bvalue), ebpf.UpdateAny); err != nil {
+				errPrint(os.Stderr, "Error updating map for rule %s: %v\n", rule.RuleName, err)
+				continue
+			}
+			success("  ✓ Added %s rule at index %d\n", rule.RuleName, i)
 		} else {
-			errPrint(os.Stderr, "Invalid action in %s rule %s: %s\n", direction, rule.RuleName, rule.Action)
-			continue
+			// error("  ✓ Added %s rule %s at index %d\n", direction, rule.RuleName, i)
 		}
-
-		// Set protocol
-		protocolNum, err := ParseProtocol(rule.Protocol)
-		if err != nil {
-			errPrint(os.Stderr, "Error parsing protocol in %s rule %s: %v\n", direction, rule.RuleName, err)
-			continue
-		}
-		value.Protocol = protocolNum
-
-		// Set IP and netmask
-		ipInt, mask, err := ParseIPWithCIDR(rule.IP)
-		if err != nil {
-			errPrint(os.Stderr, "Error parsing IP in %s rule %s: %v\n", direction, rule.RuleName, err)
-			continue
-		}
-		value.IP = ipInt
-		value.Netmask = mask
-
-		// Handle port or port range
-		if protocolNum == unix.IPPROTO_ICMP {
-			if rule.Port != "" || rule.PortRange != nil {
-				errPrint(os.Stderr, "Error: port or port_range specified for ICMP in %s rule %s\n", direction, rule.RuleName)
-				continue
-			}
-			value.HasPortRange = 0
-			*(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = 0
-			*(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = 0
-		} else if rule.PortRange != nil {
-			if rule.Port != "" {
-				errPrint(os.Stderr, "Error: both port and port_range specified in %s rule %s\n", direction, rule.RuleName)
-				continue
-			}
-			if rule.PortRange.Start > rule.PortRange.End || rule.PortRange.End > 65535 {
-				errPrint(os.Stderr, "Invalid port range in %s rule %s: %d-%d\n", direction, rule.RuleName, rule.PortRange.Start, rule.PortRange.End)
-				continue
-			}
-			value.HasPortRange = 1
-			*(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = rule.PortRange.Start
-			*(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = rule.PortRange.End
-		} else {
-			port, err := ParsePort(rule.Port)
-			if err != nil {
-				errPrint(os.Stderr, "Error parsing port in %s rule %s: %v\n", direction, rule.RuleName, err)
-				continue
-			}
-			value.HasPortRange = 0
-			*(*uint16)(unsafe.Pointer(&value.PortInfo[0])) = port
-			*(*uint16)(unsafe.Pointer(&value.PortInfo[2])) = 0 // Clear second half
-		}
-
-		// Set used and enabled flags
-		value.Used = 1
-		value.Enabled = 1
-
-		key := config.RuleKey(i)
-		if err := ruleMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&value), ebpf.UpdateAny); err != nil {
-			errPrint(os.Stderr, "Error updating %s map for rule %s: %v\n", direction, rule.RuleName, err)
-			continue
-		}
-		success("  ✓ Added %s rule %s at index %d\n", direction, rule.RuleName, i)
 	}
 	return nil
 }
@@ -482,29 +485,11 @@ func ReverseParseIPWithCIDR(ip, netmask uint32) (string, error) {
 
 // SerializeFirewallRules serializes a slice of FirewallRule structs to YAML
 func SerializeFirewallRules(rule config.FirewallRule) (string, error) {
-	// Create a FirewallConfig to wrap the rules
-	// config := FirewallConfig{
-	// 	Inbound:        []FirewallRule{},
-	// 	Outbound:       []FirewallRule{},
-	// 	InboundPolicy:  "block", // Default policy, can be customized
-	// 	OutboundPolicy: "block", // Default policy, can be customized
-	// }
-
-	// // Assign rules to the appropriate direction
-	// if direction == "inbound" {
-	// 	config.Inbound = rules
-	// } else if direction == "outbound" {
-	// 	config.Outbound = rules
-	// } else {
-	// 	return "", fmt.Errorf("invalid direction: %s, must be 'inbound' or 'outbound'", direction)
-	// }
-
 	// Serialize to YAML
 	yamlData, err := yaml.Marshal(&rule)
 	if err != nil {
 		return "", fmt.Errorf("error marshaling to YAML: %v", err)
 	}
-
 	return string(yamlData), nil
 }
 
@@ -614,222 +599,3 @@ func RetrieveFirewallConfig(ifaceName string) (config.FirewallConfig, error) {
 
 	return ifaceConfig, nil
 }
-
-// AuditRules compares YAML rules with currently applied rules
-/*
-func AuditRules(ifaceName, configPath string) error {
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("loading config: %v", err)
-	}
-
-	
-
-	// Compare inbound rules
-	inboundMap := coll.Maps["inbound_rules"]
-	var key config.RuleKey
-	var value config.RuleValue
-	appliedInbound := make(map[string]config.RuleValue)
-	iter := inboundMap.Iterate()
-	for iter.Next(&key, &value) {
-		if value.Used == 0 || value.Enabled == 0 {
-			continue
-		}
-		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
-		fmt.Println(ruleName)
-
-		// Convert struct to byte slice using unsafe
-		size := unsafe.Sizeof(value)
-		bytes := (*[148]byte)(unsafe.Pointer(&value))[:size:size]
-
-		// Print binary representation of each byte
-		for _, b := range bytes {
-			fmt.Printf("%02x ", b)
-		}
-		fmt.Println()
-
-		// Print hex for each field
-		fmt.Printf("RuleName: %x\n", value.RuleName)
-		fmt.Printf("Action: %02x\n", value.Action)
-		fmt.Printf("Protocol: %04x\n", value.Protocol)
-		fmt.Printf("IP: %08x\n", value.IP)
-		fmt.Printf("Netmask: %08x\n", value.Netmask)
-		fmt.Printf("HasPortRange: %02x\n", value.HasPortRange)
-		fmt.Printf("PortInfo: %x\n", value.PortInfo)
-		fmt.Printf("Used: %02x\n", value.Used)
-		fmt.Printf("Enabled: %02x\n", value.Enabled)
-
-		testr, err := ConvertBinaryRuleToFirewallRule(value)
-		if err != nil {
-			return fmt.Errorf("Reversing: %v", err)
-		} else {
-			fmt.Printf("SBOOB Protocol: %s\n", testr.Protocol)
-			yamlStr, _ := SerializeFirewallRules(testr)
-			fmt.Printf("%s\n", yamlStr)
-		}
-
-		appliedInbound[ruleName] = value
-	}
-
-	configInbound := make(map[string]config.FirewallRule)
-	for _, rule := range cfg.Inbound {
-		configInbound[rule.RuleName] = rule
-	}
-
-	differences := 0
-	for ruleName, applied := range appliedInbound {
-		configRule, exists := configInbound[ruleName]
-		if !exists {
-			errPrint(os.Stderr, "Inbound rule %s found in eBPF but not in config\n", ruleName)
-			differences++
-			continue
-		}
-		// Compare fields
-		configAction := strings.ToLower(configRule.Action)
-		appliedAction := "block"
-		if applied.Action == 1 {
-			appliedAction = "allow"
-		}
-		if configAction != appliedAction {
-			errPrint(os.Stderr, "Inbound rule %s action mismatch: config=%s, applied=%s\n", ruleName, configRule.Action, appliedAction)
-			differences++
-		}
-		configProto, _ := ParseProtocol(configRule.Protocol)
-		if configProto != applied.Protocol {
-			errPrint(os.Stderr, "Inbound rule %s protocol mismatch: config=%s, applied=%d\n", ruleName, configRule.Protocol, applied.Protocol)
-			differences++
-		}
-		configIP, configMask, _ := ParseIPWithCIDR(configRule.IP)
-		if configIP != applied.IP || configMask != applied.Netmask {
-			errPrint(os.Stderr, "Inbound rule %s IP/mask mismatch: config=%s, applied=%d/%d\n", ruleName, configRule.IP, applied.IP, applied.Netmask)
-			differences++
-		}
-		if configRule.PortRange != nil {
-			if applied.HasPortRange != 1 {
-				errPrint(os.Stderr, "Inbound rule %s port range mismatch: expected range, got single port\n", ruleName)
-				differences++
-			} else {
-				start := *(*uint16)(unsafe.Pointer(&value.PortInfo[0]))
-				end := *(*uint16)(unsafe.Pointer(&value.PortInfo[2]))
-				if configRule.PortRange.Start != start || configRule.PortRange.End != end {
-					errPrint(os.Stderr, "Inbound rule %s port range mismatch: config=%d-%d, applied=%d-%d\n", ruleName, configRule.PortRange.Start, configRule.PortRange.End, start, end)
-					differences++
-				}
-			}
-		} else if configRule.Port != "" && configRule.Protocol != "icmp" {
-			port, _ := ParsePort(configRule.Port)
-			if applied.HasPortRange != 0 || *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) != port {
-				errPrint(os.Stderr, "Inbound rule %s port mismatch: config=%s, applied=%d\n", ruleName, configRule.Port, *(*uint16)(unsafe.Pointer(&value.PortInfo[0])))
-				differences++
-			}
-		}
-		delete(configInbound, ruleName)
-	}
-	for ruleName := range configInbound {
-		errPrint(os.Stderr, "Inbound rule %s found in config but not in eBPF\n", ruleName)
-		differences++
-	}
-
-	// Compare outbound rules
-	outboundMap := coll.Maps["outbound_rules"]
-	appliedOutbound := make(map[string]config.RuleValue)
-	iter = outboundMap.Iterate()
-	for iter.Next(&key, &value) {
-		if value.Used == 0 || value.Enabled == 0 {
-			continue
-		}
-		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
-		appliedOutbound[ruleName] = value
-	}
-
-	configOutbound := make(map[string]config.FirewallRule)
-	for _, rule := range cfg.Outbound {
-		configOutbound[rule.RuleName] = rule
-	}
-
-	for ruleName, applied := range appliedOutbound {
-		configRule, exists := configOutbound[ruleName]
-		if !exists {
-			errPrint(os.Stderr, "Outbound rule %s found in eBPF but not in config\n", ruleName)
-			differences++
-			continue
-		}
-		// Compare fields
-		configAction := strings.ToLower(configRule.Action)
-		appliedAction := "block"
-		if applied.Action == 1 {
-			appliedAction = "allow"
-		}
-		if configAction != appliedAction {
-			errPrint(os.Stderr, "Outbound rule %s action mismatch: config=%s, applied=%s\n", ruleName, configRule.Action, appliedAction)
-			differences++
-		}
-		configProto, _ := ParseProtocol(configRule.Protocol)
-		if configProto != applied.Protocol {
-			errPrint(os.Stderr, "Outbound rule %s protocol mismatch: config=%s, applied=%d\n", ruleName, configRule.Protocol, applied.Protocol)
-			differences++
-		}
-		configIP, configMask, _ := ParseIPWithCIDR(configRule.IP)
-		if configIP != applied.IP || configMask != applied.Netmask {
-			errPrint(os.Stderr, "Outbound rule %s IP/mask mismatch: config=%s, applied=%d/%d\n", ruleName, configRule.IP, applied.IP, applied.Netmask)
-			differences++
-		}
-		if configRule.PortRange != nil {
-			if applied.HasPortRange != 1 {
-				errPrint(os.Stderr, "Outbound rule %s port range mismatch: expected range, got single port\n", ruleName)
-				differences++
-			} else {
-				start := *(*uint16)(unsafe.Pointer(&value.PortInfo[0]))
-				end := *(*uint16)(unsafe.Pointer(&value.PortInfo[2]))
-				if configRule.PortRange.Start != start || configRule.PortRange.End != end {
-					errPrint(os.Stderr, "Outbound rule %s port range mismatch: config=%d-%d, applied=%d-%d\n", ruleName, configRule.PortRange.Start, configRule.PortRange.End, start, end)
-					differences++
-				}
-			}
-		} else if configRule.Port != "" && configRule.Protocol != "icmp" {
-			port, _ := ParsePort(configRule.Port)
-			if applied.HasPortRange != 0 || *(*uint16)(unsafe.Pointer(&value.PortInfo[0])) != port {
-				errPrint(os.Stderr, "Outbound rule %s port mismatch: config=%s, applied=%d\n", ruleName, configRule.Port, *(*uint16)(unsafe.Pointer(&value.PortInfo[0])))
-				differences++
-			}
-		}
-		delete(configOutbound, ruleName)
-	}
-	for ruleName := range configOutbound {
-		errPrint(os.Stderr, "Outbound rule %s found in config but not in eBPF\n", ruleName)
-		differences++
-	}
-
-	// Compare default policies
-	inboundDefaultMap := coll.Maps["inbound_default_policy"]
-	var defaultAction uint8
-	if err := inboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
-		policy := "DROP"
-		if defaultAction == 1 {
-			policy = "ACCEPT"
-		}
-		if strings.ToUpper(cfg.InboundPolicy) != policy {
-			errPrint(os.Stderr, "Inbound default policy mismatch: config=%s, applied=%s\n", cfg.InboundPolicy, policy)
-			differences++
-		}
-	}
-	outboundDefaultMap := coll.Maps["outbound_default_policy"]
-	if err := outboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
-		policy := "DROP"
-		if defaultAction == 1 {
-			policy = "ACCEPT"
-		}
-		if strings.ToUpper(cfg.OutboundPolicy) != policy {
-			errPrint(os.Stderr, "Outbound default policy mismatch: config=%s, applied=%s\n", cfg.OutboundPolicy, policy)
-			differences++
-		}
-	}
-
-	if differences > 0 {
-		errPrint(os.Stderr, "Found %d differences between config and applied rules\n", differences)
-		os.Exit(1)
-	}
-	success("No differences found between config and applied rules\n")
-	return nil
-}
-*/
