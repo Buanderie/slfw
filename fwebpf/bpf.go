@@ -211,6 +211,7 @@ func AttachPrograms(ifaceName string, defaultDrop bool) (*ebpf.Collection, link.
 		Interface: ifaceLink.Attrs().Index,
 		Flags:     link.XDPGenericMode,
 	})
+	
 	if err != nil {
 		progFD := inboundProg.FD()
 		if progFD < 0 {
@@ -221,13 +222,13 @@ func AttachPrograms(ifaceName string, defaultDrop bool) (*ebpf.Collection, link.
 		}
 		// coll.Close()
 		// return nil, nil, nil, fmt.Errorf("attaching XDP program to %s: %v", ifaceName, err)
+	} else {
+		if err := xdpLink.Pin(filepath.Join(bpfFsPath, "xdp_link")); err != nil {
+			xdpLink.Close()
+			coll.Close()
+			return nil, nil, nil, fmt.Errorf("pinning XDP link: %v", err)
+		}
 	}
-
-	// if err := xdpLink.Pin(filepath.Join(bpfFsPath, "xdp_link")); err != nil {
-	// 	xdpLink.Close()
-	// 	coll.Close()
-	// 	return nil, nil, nil, fmt.Errorf("pinning XDP link: %v", err)
-	// }
 
 	fmt.Printf("Successfully attached and pinned XDP program to %s\n", ifaceName)
 

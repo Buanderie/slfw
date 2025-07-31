@@ -79,20 +79,20 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
     // Parse TCP/UDP header for ports
     if (ip->protocol == IPPROTO_TCP) {
         if (transport_header + sizeof(struct tcphdr) > data_end) {
-            bpf_printk("Invalid TCP header\n");
+            // bpf_printk("Invalid TCP header\n");
             return XDP_PASS;
         }
         struct tcphdr *tcp = transport_header;
         dst_port = __constant_ntohs(tcp->dest);
     } else if (ip->protocol == IPPROTO_UDP) {
         if (transport_header + sizeof(struct udphdr) > data_end) {
-            bpf_printk("Invalid UDP header\n");
+            // bpf_printk("Invalid UDP header\n");
             return XDP_PASS;
         }
         struct udphdr *udp = transport_header;
         dst_port = __constant_ntohs(udp->dest);
     } else if (ip->protocol != IPPROTO_ICMP) {
-        bpf_printk("Unsupported protocol=%d\n", ip->protocol);
+        // bpf_printk("Unsupported protocol=%d\n", ip->protocol);
         return XDP_PASS;
     }
 
@@ -137,7 +137,7 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
         }
 
         // Rule matches, apply action
-        bpf_printk("[IN] MATCH RULE [ %s ] idx=%d action=%d\n", rule->rule_name, i, rule->action);
+        // bpf_printk("[IN] MATCH RULE [ %s ] idx=%d action=%d\n", rule->rule_name, i, rule->action);
         if (rule->action == POLICY_ACCEPT) {
             return XDP_PASS;
         }
