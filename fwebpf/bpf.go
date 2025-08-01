@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"unsafe"
 	"strings"
 	
 	"github.com/cilium/ebpf"
@@ -73,6 +74,20 @@ func LoadPinnedCollection(bpfFsPath string) (*ebpf.Collection, error) {
 		},
 	}
 	return coll, nil
+}
+
+// SetDefaultPolicy updates the default policy map with the specified policy
+func SetDefaultPolicy(policyMap *ebpf.Map, policy string, direction string) error {
+	var defaultKey uint32 = 0
+	defaultAction := uint8(0) // POLICY_DROP
+	if strings.ToUpper(policy) == "ACCEPT" {
+		defaultAction = 1 // POLICY_ACCEPT
+	}
+	if err := policyMap.Update(unsafe.Pointer(&defaultKey), unsafe.Pointer(&defaultAction), ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("error setting %s default policy: %v", direction, err)
+	}
+	fmt.Printf("Set %s default policy to %s\n", direction, policy)
+	return nil
 }
 
 // AttachPrograms attaches eBPF programs to the specified interface
@@ -272,6 +287,19 @@ func AttachPrograms(ifaceName string, defaultDrop bool) (*ebpf.Collection, link.
 		return nil, nil, nil, fmt.Errorf("failed to add TC filter: %v", err)
 	}
 
+	// Apply default policy rules
+	var defaultPolicy = "ACCEPT"
+	if defaultDrop {
+		defaultPolicy = "DROP"
+	}
+	if err := SetDefaultPolicy(coll.Maps["inbound_default_policy"], defaultPolicy, "inbound"); err != nil {
+		return coll, xdpLink, tcLink, fmt.Errorf("setting inbound policy: %v", err)
+	}
+	if err := SetDefaultPolicy(coll.Maps["outbound_default_policy"], defaultPolicy, "outbound"); err != nil {
+		return coll, xdpLink, tcLink, fmt.Errorf("setting outbound policy: %v", err)
+	}
+
+	// And we're done!
 	fmt.Printf("Successfully attached and pinned TC program to %s\n", ifaceName)
 
 	return coll, xdpLink, tcLink, nil

@@ -58,10 +58,10 @@ rules along with default policies.`,
 		defer coll.Close()
 		
 		// Apply rules
-		if err := rules.SetDefaultPolicy(coll.Maps["inbound_default_policy"], cfg.InboundPolicy, "inbound"); err != nil {
+		if err := fwebpf.SetDefaultPolicy(coll.Maps["inbound_default_policy"], cfg.InboundPolicy, "inbound"); err != nil {
 			return fmt.Errorf("setting inbound policy: %v", err)
 		}
-		if err := rules.SetDefaultPolicy(coll.Maps["outbound_default_policy"], cfg.OutboundPolicy, "outbound"); err != nil {
+		if err := fwebpf.SetDefaultPolicy(coll.Maps["outbound_default_policy"], cfg.OutboundPolicy, "outbound"); err != nil {
 			return fmt.Errorf("setting outbound policy: %v", err)
 		}
 		if err := rules.ProcessRules(cfg.Inbound, coll.Maps["inbound_rules"], iface); err != nil {
@@ -72,7 +72,6 @@ rules along with default policies.`,
 		}
 		
 		success("Firewall rules applied to interface %s\n", iface)
-		info("Firewall is running. Press Ctrl+C to stop.\n")
 
 		return nil
 	},

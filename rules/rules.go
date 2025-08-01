@@ -90,20 +90,6 @@ func ParseProtocol(protocolStr string) (uint16, error) {
 	}
 }
 
-// SetDefaultPolicy updates the default policy map with the specified policy
-func SetDefaultPolicy(policyMap *ebpf.Map, policy string, direction string) error {
-	var defaultKey uint32 = 0
-	defaultAction := uint8(0) // POLICY_DROP
-	if strings.ToUpper(policy) == "ACCEPT" {
-		defaultAction = 1 // POLICY_ACCEPT
-	}
-	if err := policyMap.Update(unsafe.Pointer(&defaultKey), unsafe.Pointer(&defaultAction), ebpf.UpdateAny); err != nil {
-		return fmt.Errorf("error setting %s default policy: %v", direction, err)
-	}
-	success("Set %s default policy to %s\n", direction, policy)
-	return nil
-}
-
 // TODO
 // FirewallRuleToEBPF converts a FirewallRule to an eBPF RuleValue.
 func FirewallRuleToEBPF(rule config.FirewallRule) (config.RuleValue, error) {

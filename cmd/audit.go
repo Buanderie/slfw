@@ -147,6 +147,7 @@ func AuditRuleMap(iface string, mapName string, configMap []config.FirewallRule)
 			fmt.Printf("%s\n", color.RedString("%s", yamlStr))
 		}
 	}
+
 	if len(result.ExtraRules) > 0 {
 		fmt.Println("Extra rules (enforced but not in config):")
 		for _, rule := range result.ExtraRules {
@@ -155,7 +156,13 @@ func AuditRuleMap(iface string, mapName string, configMap []config.FirewallRule)
 			fmt.Printf("%s\n", color.GreenString("%s", yamlStr))
 		}
 	}
-	return nil
+
+	if result.Match {
+		return nil
+	} else {
+		return fmt.Errorf("audit failed: rules do not match")
+	}
+	
 }
 
 func AuditDefaultPolicy(iface string, mapName string, expectedPolicy string) error {
