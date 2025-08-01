@@ -116,10 +116,10 @@ func FirewallRuleToEBPF(rule config.FirewallRule) (config.RuleValue, error) {
     copy(value.RuleName[:], []byte(rule.RuleName))
 
     // Set action
-    if strings.ToLower(rule.Action) == "allow" {
-        value.Action = 1 // POLICY_ACCEPT
-    } else if strings.ToLower(rule.Action) == "block" {
-        value.Action = 0 // POLICY_DROP
+    if strings.ToLower(rule.Action) == "accept" {
+        value.Action = config.POLICY_ACCEPT
+    } else if strings.ToLower(rule.Action) == "drop" {
+        value.Action = config.POLICY_DROP
     } else {
         return value, fmt.Errorf("invalid action rule %s: %s", rule.RuleName, rule.Action)
     }
@@ -242,9 +242,9 @@ func PrintRules(ifaceName string) error {
 			continue
 		}
 		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
-		action := "BLOCK"
-		if value.Action == 1 {
-			action = "ALLOW"
+		action := "DROP"
+		if value.Action == config.POLICY_ACCEPT {
+			action = "ACCEPT"
 		}
 		protocol := "any"
 		switch value.Protocol {
@@ -293,9 +293,9 @@ func PrintRules(ifaceName string) error {
 			continue
 		}
 		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
-		action := "BLOCK"
-		if value.Action == 1 {
-			action = "ALLOW"
+		action := "DROP"
+		if value.Action == config.POLICY_ACCEPT {
+			action = "ACCEPT"
 		}
 		protocol := "any"
 		switch value.Protocol {
@@ -340,7 +340,7 @@ func PrintRules(ifaceName string) error {
 	var defaultAction uint8
 	if err := inboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
 		policy := "DROP"
-		if defaultAction == 1 {
+		if defaultAction == config.POLICY_ACCEPT {
 			policy = "ACCEPT"
 		}
 		info("\nInbound Default Policy: %s\n", policy)
@@ -348,7 +348,7 @@ func PrintRules(ifaceName string) error {
 	outboundDefaultMap := coll.Maps["outbound_default_policy"]
 	if err := outboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
 		policy := "DROP"
-		if defaultAction == 1 {
+		if defaultAction == config.POLICY_ACCEPT {
 			policy = "ACCEPT"
 		}
 		info("\nOutbound Default Policy: %s\n", policy)
@@ -379,10 +379,10 @@ func ConvertBinaryRuleToFirewallRule(value config.RuleValue) (config.FirewallRul
 
 		// Convert action
 		switch value.Action {
-		case 1: // POLICY_ACCEPT
-			rule.Action = "allow"
-		case 0: // POLICY_DROP
-			rule.Action = "block"
+		case config.POLICY_ACCEPT: // POLICY_ACCEPT
+			rule.Action = "ACCEPT"
+		case config.POLICY_DROP: // POLICY_DROP
+			rule.Action = "DROP"
 		default:
 			return rule, fmt.Errorf("invalid action value %d in rule %s", value.Action, rule.RuleName)
 		}

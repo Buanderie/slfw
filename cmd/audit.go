@@ -134,11 +134,11 @@ func AuditRuleMap(iface string, mapName string, configMap []config.FirewallRule)
 
 	// Print audit report
 	if result.Match {
-		fmt.Println(color.GreenString("Audit passed: Enforced rules match configuration."))
+		fmt.Println(color.GreenString("PASS"))
 		return nil
 	}
 
-	fmt.Println(color.RedString("Audit failed: Differences found between configuration and enforced rules."))
+	fmt.Println(color.RedString("FAIL"))
 	if len(result.MissingRules) > 0 {
 		fmt.Println("Missing rules (in config but not enforced):")
 		for _, rule := range result.MissingRules {
@@ -167,11 +167,11 @@ func AuditDefaultPolicy(iface string, mapName string, expectedPolicy string) err
 
 	// Compare policies
 	if enforcedPolicy == strings.ToUpper(expectedPolicy) {
-		fmt.Println(color.GreenString("Default policy matches configuration."))
+		fmt.Printf(color.GreenString("PASS: (%s)\n"), strings.ToUpper(enforcedPolicy))
 		return nil
 	}
 
-	fmt.Printf(color.RedString("Default policy mismatch: expected '%s', got '%s'.\n"), expectedPolicy, strings.ToUpper(enforcedPolicy))
+	fmt.Printf(color.RedString("FAIL: expected '%s' - enforced '%s'\n"), expectedPolicy, strings.ToUpper(enforcedPolicy))
 	return fmt.Errorf("default policy mismatch")
 }
 
