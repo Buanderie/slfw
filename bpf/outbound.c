@@ -59,20 +59,20 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
         return TC_ACT_OK; // Malformed packet
     }
 
-    __u16 src_port = 0;
+    __u16 dst_port = 0;
     // Parse TCP/UDP header for ports
     if (ip->protocol == IPPROTO_TCP) {
         struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
         if ((void *)tcp + sizeof(*tcp) > data_end) {
             return TC_ACT_OK;
         }
-        src_port = __constant_ntohs(tcp->source);
+        dst_port = __constant_ntohs(tcp->dest);
     } else if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)ip + (ip->ihl * 4);
         if ((void *)udp + sizeof(*udp) > data_end) {
             return TC_ACT_OK;
         }
-        src_port = __constant_ntohs(udp->source);
+        dst_port = __constant_ntohs(udp->dest);
     } else if (ip->protocol != IPPROTO_ICMP) {
         return TC_ACT_OK; // Unknown protocol, pass
     }
@@ -96,8 +96,8 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
 
         // Match source IP (0 means any IP)
         if (rule->ip != 0) {
-            __u32 src_ip = __constant_ntohl(ip->daddr);
-            if ((src_ip & rule->netmask) != (rule->ip & rule->netmask)) {
+            __u32 dst_ip = __constant_ntohl(ip->daddr);
+            if ((dst_ip & rule->netmask) != (rule->ip & rule->netmask)) {
                 continue;
             }
         }
@@ -108,12 +108,12 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
                 // Check port range
                 __u16 start = rule->port_info.port_range.start;
                 __u16 end = rule->port_info.port_range.end;
-                if (src_port < start || src_port > end) {
+                if (dst_port < start || dst_port > end) {
                     continue;
                 }
             } else {
                 // Check single port (0 means any port)
-                if (rule->port_info.port != 0 && rule->port_info.port != src_port) {
+                if (rule->port_info.port != 0 && rule->port_info.port != dst_port) {
                     continue;
                 }
             }

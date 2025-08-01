@@ -83,14 +83,14 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
             return XDP_PASS;
         }
         struct tcphdr *tcp = transport_header;
-        dst_port = __constant_ntohs(tcp->dest);
+        dst_port = __constant_ntohs(tcp->source);
     } else if (ip->protocol == IPPROTO_UDP) {
         if (transport_header + sizeof(struct udphdr) > data_end) {
             // bpf_printk("Invalid UDP header\n");
             return XDP_PASS;
         }
         struct udphdr *udp = transport_header;
-        dst_port = __constant_ntohs(udp->dest);
+        dst_port = __constant_ntohs(udp->source);
     } else if (ip->protocol != IPPROTO_ICMP) {
         // bpf_printk("Unsupported protocol=%d\n", ip->protocol);
         return XDP_PASS;
