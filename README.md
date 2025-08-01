@@ -86,7 +86,7 @@ This eBPF firewall is more secure and auditable than iptables in Docker environm
    sudo ./ebpf-firewall -i eth0 detach
    ```
 
-* Print rules enforced on an interface
+   * Print rules enforced on an interface
    ```bash
    xxx@xxx:$ sudo ./firewall -i eth0 print
     Inbound Rules:
@@ -102,17 +102,37 @@ This eBPF firewall is more secure and auditable than iptables in Docker environm
     Rule allow_icmp_outbound: icmp any n/a:ALLOW
     Rule block_specific_port_range_outbound: tcp 10.0.0.0/16 1000-2000:BLOCK
    ```
-6. Detach firewall from an interface
-     ```bash
-     xxx@xxx:$ sudo ./firewall -i eth0 detach
-    Detached XDP program from eth0
-    Successfully detached eBPF programs and removed pinned objects from eth0
-     ```
 
-7. **Audit**:
-   - Run the audit command to verify map rules against config:
+6. **Audit**:
+  Run the audit command to verify map rules against config:
      ```bash
      sudo ./firewall -i eth0 audit -c config.yaml
+      Audit result for INBOUND rules:
+      FAIL
+      Missing rules (in config but not enforced):
+        - 000000010000000000000000000000000000
+      rule_name: ""
+      action: DROP
+      protocol: icmp
+      ip: 0.0.0.0/0
+      description: ""
+
+      Extra rules (enforced but not in config):
+        - 010000010000000000000000000000000000
+      rule_name: ""
+      action: ACCEPT
+      protocol: icmp
+      ip: 0.0.0.0/0
+      description: ""
+
+      Audit result for INBOUND default policy:
+      PASS: (DROP)
+      Audit result for OUTBOUND rules:
+      PASS
+      Audit result for OUTBOUND default policy:
+      PASS: (DROP)
+      Error: audit failed: audit failed: rules do not match
+      Error: audit failed: audit failed: rules do not match
      ```
 
 ## Example YAML Config
