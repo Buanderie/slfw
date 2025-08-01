@@ -8,6 +8,9 @@ import (
 	"unsafe"
 	"syscall"
 
+	"bytes"
+	"encoding/binary"
+
 	"firewall/config"
 	"firewall/fwebpf"
 
@@ -370,9 +373,9 @@ func ConvertBinaryRuleToFirewallRule(value config.RuleValue) (config.FirewallRul
 		// Extract rule name (convert [128]byte to string, trimming null bytes)
 		ruleName := string(value.RuleName[:])
 		rule.RuleName = strings.TrimRight(ruleName, "\x00")
-		if rule.RuleName == "" {
-			return rule, fmt.Errorf("invalid empty rule name")
-		}
+		// if rule.RuleName == "" {
+		// 	return rule, fmt.Errorf("invalid empty rule name")
+		// }
 
 		// Convert action
 		switch value.Action {
@@ -491,6 +494,197 @@ func SerializeFirewallRules(rule config.FirewallRule) (string, error) {
 		return "", fmt.Errorf("error marshaling to YAML: %v", err)
 	}
 	return string(yamlData), nil
+}
+
+// GetBinaryRepresentation returns the binary representation of RuleValue excluding RuleName, Used, and Enabled
+func GetRuleBinarySignature(rv config.RuleValue) ([]byte, error) {
+	// Create a buffer to store binary data
+	var buf bytes.Buffer
+
+	// Write the entire struct to the buffer using binary encoding (big-endian)
+	if err := binary.Write(&buf, binary.BigEndian, rv); err != nil {
+		return nil, fmt.Errorf("failed to encode struct to binary: %w", err)
+	}
+
+	// Calculate offsets and sizes
+	const (
+		ruleNameSize = 128              // Size of RuleName ([128]byte)
+		usedSize     = 1                // Size of Used (uint8)
+		enabledSize  = 1                // Size of Enabled (uint8)
+		totalTrim    = ruleNameSize + usedSize + enabledSize
+	)
+
+	// Get the full byte array
+	data := buf.Bytes()
+
+	// Ensure the buffer is large enough
+	if len(data) < totalTrim {
+		return nil, fmt.Errorf("binary data too short: got %d bytes, expected at least %d", len(data), totalTrim)
+	}
+
+	// Trim RuleName (start) and Used+Enabled (end)
+	return data[ruleNameSize : len(data)-usedSize-enabledSize], nil
+}
+
+// ParseRuleBinarySignature reconstructs a config.RuleValue from its binary signature.
+// The input is the binary data produced by GetRuleBinarySignature, which excludes
+// RuleName ([128]byte), Used (uint8), and Enabled (uint8). The reconstructed struct
+// has zero values for these fields.
+func ParseRuleBinarySignature(data []byte, expectedTrimmedSize int) (config.RuleValue, error) {
+	// Constants for trimmed fields
+	const (
+		ruleNameSize = 128 // Size of RuleName ([128]byte)
+		usedSize     = 1   // Size of Used (uint8)
+		enabledSize  = 1   // Size of Enabled (uint8)
+		totalTrim    = ruleNameSize + usedSize + enabledSize
+	)
+
+	// Validate input size
+	if len(data) != expectedTrimmedSize {
+		return config.RuleValue{}, fmt.Errorf("invalid binary data length: got %d bytes, expected %d", len(data), expectedTrimmedSize)
+	}
+
+	// Create a buffer for the full struct
+	var rv config.RuleValue
+	var buf bytes.Buffer
+
+	// Write RuleName (zero-filled, 128 bytes)
+	var ruleName [128]byte
+	if _, err := buf.Write(ruleName[:]); err != nil {
+		return config.RuleValue{}, fmt.Errorf("failed to write RuleName: %w", err)
+	}
+
+	// Write the input data (non-trimmed fields)
+	if _, err := buf.Write(data); err != nil {
+		return config.RuleValue{}, fmt.Errorf("failed to write rule data: %w", err)
+	}
+
+	// Write Used and Enabled (zero-filled, 1 byte each)
+	if err := buf.WriteByte(0); err != nil {
+		return config.RuleValue{}, fmt.Errorf("failed to write Used: %w", err)
+	}
+	if err := buf.WriteByte(0); err != nil {
+		return config.RuleValue{}, fmt.Errorf("failed to write Enabled: %w", err)
+	}
+
+	// Decode the full buffer into the struct
+	if err := binary.Read(&buf, binary.BigEndian, &rv); err != nil {
+		return config.RuleValue{}, fmt.Errorf("failed to decode binary to struct: %w", err)
+	}
+
+	return rv, nil
+}
+
+func RetrieveFirewallBinaryRules(ifaceName string, mapName string) ([]config.RuleValue, error) {
+	var binaryRules []config.RuleValue
+
+	// Check if programs are attached
+	ifaceLink, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return binaryRules, fmt.Errorf("getting interface %s: %v", ifaceName, err)
+	}
+
+	xdpAttached := false
+	if ifaceLink.Attrs().Xdp != nil && ifaceLink.Attrs().Xdp.Attached {
+		xdpAttached = true
+	}
+
+	filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
+	if err != nil {
+		return binaryRules, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
+	}
+	tcAttached := false
+	for _, f := range filters {
+		if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
+			tcAttached = true
+			break
+		}
+	}
+
+	if !xdpAttached || !tcAttached {
+		errPrint(os.Stderr, "eBPF programs not fully attached to interface %s\n", ifaceName)
+		os.Exit(1)
+	}
+
+	// Load pinned maps
+	bpfFsPath := "/sys/fs/bpf/slfw_" + ifaceName
+	coll, err := fwebpf.LoadPinnedCollection(bpfFsPath)
+	if err != nil {
+		return binaryRules, fmt.Errorf("loading pinned eBPF objects from %s: %v", bpfFsPath, err)
+	}
+	defer coll.Close()
+
+	// Fetch map rules
+	inboundMap := coll.Maps[mapName]
+	var key config.RuleKey
+	var value config.RuleValue
+	iter := inboundMap.Iterate()
+	for iter.Next(&key, &value) {
+		if value.Used == 0 || value.Enabled == 0 {
+			continue
+		}
+		binaryRules = append(binaryRules, value)
+	}
+
+	return binaryRules, nil
+}
+
+func GetDefaultPolicy(ifaceName string, mapName string) (string, error) {
+
+	var retValue string
+
+	// Check if programs are attached
+	ifaceLink, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return retValue, fmt.Errorf("getting interface %s: %v", ifaceName, err)
+	}
+
+	xdpAttached := false
+	if ifaceLink.Attrs().Xdp != nil && ifaceLink.Attrs().Xdp.Attached {
+		xdpAttached = true
+	}
+
+	filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
+	if err != nil {
+		return retValue, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
+	}
+	tcAttached := false
+	for _, f := range filters {
+		if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
+			tcAttached = true
+			break
+		}
+	}
+
+	if !xdpAttached || !tcAttached {
+		errPrint(os.Stderr, "eBPF programs not fully attached to interface %s\n", ifaceName)
+		os.Exit(1)
+	}
+
+	// Load pinned maps
+	bpfFsPath := "/sys/fs/bpf/slfw_" + ifaceName
+	coll, err := fwebpf.LoadPinnedCollection(bpfFsPath)
+	if err != nil {
+		return retValue, fmt.Errorf("loading pinned eBPF objects from %s: %v", bpfFsPath, err)
+	}
+	defer coll.Close()
+
+	// Fetch map rules
+	inboundMap := coll.Maps[mapName]
+	var key config.RuleKey
+	var value uint8
+	iter := inboundMap.Iterate()
+	for iter.Next(&key, &value) {
+		if value == config.POLICY_DROP {
+			retValue = "DROP"
+		} else if value == config.POLICY_ACCEPT {
+			retValue = "ACCEPT"
+		}
+		break;
+	}
+
+	return retValue, nil
+
 }
 
 func RetrieveFirewallConfig(ifaceName string) (config.FirewallConfig, error) {

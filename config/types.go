@@ -42,3 +42,10 @@ type RuleValue struct {
 
 // RuleKey represents the eBPF map key
 type RuleKey uint32
+
+//
+type PolicyAction uint8
+const (
+	POLICY_DROP = iota // 0
+	POLICY_ACCEPT            // 1
+)

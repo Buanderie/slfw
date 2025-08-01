@@ -1,16 +1,16 @@
 # Makefile for eBPF firewall
 .PHONY: all clean generate
 
-all: generate firewall
+all: secure-linux-firewall
 
-generate:
+bpf_programs: bpf/inbound.c bpf/outbound.c
 	go generate 
 
-firewall: main.go
-	CGO_ENABLED=0 GOFLAGS=-buildvcs=false go build -o firewall
+secure-linux-firewall: bpf_programs main.go
+	CGO_ENABLED=0 GOFLAGS=-buildvcs=false go build -o secure-linux-firewall
 
 clean:
-	rm -f firewall
+	rm -f secure-linux-firewall
 	rm -rf bpf_firewall_bpf*
 	rm -rf *_bpfe*
 	rm -rf fwebpf/*_bpfe*

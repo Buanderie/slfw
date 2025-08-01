@@ -1,4 +1,4 @@
-# slfw
+# secure-linux-firewall
 
 ## Overview
 This project implements a high-performance, auditable firewall for Linux environments using **eBPF (extended Berkeley Packet Filter)**. It leverages **XDP (eXpress Data Path)** for ingress filtering and **TC (Traffic Control)** for egress filtering, bypassing Docker’s problematic iptables NAT rules. Built with **Cilium’s eBPF library** in a portable **GoLang application**, the firewall uses a **YAML configuration file** and a **binary diff-based audit process** to ensure runtime rules match the intended policy. This solution provides superior security, performance, and auditability compared to traditional iptables-based firewalls.
