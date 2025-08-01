@@ -236,6 +236,33 @@ func PrintRules(ifaceName string) error {
 	const green = "\033[32m"
 	const reset = "\033[0m"
 
+	/*
+	// Print defqult inbound policy
+	inboundDefaultMap := coll.Maps["inbound_default_policy"]
+	var defaultKey config.RuleKey
+	var defaultAction uint8
+	if err := inboundDefaultMap.Lookup(&defaultKey, &defaultAction); err == nil {
+		policy := "DROP"
+		if defaultAction == config.POLICY_ACCEPT {
+			policy = "ACCEPT"
+		}
+		info("Inbound Default Policy: %s\n", policy)
+	} else {
+		info("Inbound Default Policy: not set\n")
+	}
+	// Print default outbound policy
+	outboundDefaultMap := coll.Maps["outbound_default_policy"]
+	if err := outboundDefaultMap.Lookup(&defaultKey, &defaultAction); err == nil {
+		policy := "DROP"
+		if defaultAction == config.POLICY_ACCEPT {
+			policy = "ACCEPT"
+		}
+		info("Outbound Default Policy: %s\n", policy)
+	} else {
+		info("Outbound Default Policy: not set\n")
+	}
+	*/
+
 	// Print inbound rules
 	inboundMap := coll.Maps["inbound_rules"]
 	info("Inbound Rules:\n")
@@ -342,19 +369,21 @@ func PrintRules(ifaceName string) error {
 
 	// Print default policies
 	inboundDefaultMap := coll.Maps["inbound_default_policy"]
+	key = 0
 	var defaultAction uint8
 	if err := inboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
-		policy := "DROP"
+		policy := red + "DROP" + reset
 		if defaultAction == config.POLICY_ACCEPT {
-			policy = "ACCEPT"
+			policy = green + "ACCEPT" + reset
 		}
 		info("\nInbound Default Policy: %s\n", policy)
 	}
+
 	outboundDefaultMap := coll.Maps["outbound_default_policy"]
 	if err := outboundDefaultMap.Lookup(&key, &defaultAction); err == nil {
-		policy := "DROP"
+		policy := red + "DROP" + reset
 		if defaultAction == config.POLICY_ACCEPT {
-			policy = "ACCEPT"
+			policy = green + "ACCEPT" + reset
 		}
 		info("\nOutbound Default Policy: %s\n", policy)
 	}
