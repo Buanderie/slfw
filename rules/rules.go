@@ -231,6 +231,11 @@ func PrintRules(ifaceName string) error {
 	}
 	defer coll.Close()
 
+	// Define ANSI color codes
+	const red = "\033[31m"
+	const green = "\033[32m"
+	const reset = "\033[0m"
+
 	// Print inbound rules
 	inboundMap := coll.Maps["inbound_rules"]
 	info("Inbound Rules:\n")
@@ -242,9 +247,9 @@ func PrintRules(ifaceName string) error {
 			continue
 		}
 		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
-		action := "DROP"
+		action := red + "DROP" + reset
 		if value.Action == config.POLICY_ACCEPT {
-			action = "ACCEPT"
+			action = green + "ACCEPT" + reset
 		}
 		protocol := "any"
 		switch value.Protocol {
@@ -293,9 +298,9 @@ func PrintRules(ifaceName string) error {
 			continue
 		}
 		ruleName := strings.TrimRight(string(value.RuleName[:]), "\x00")
-		action := "DROP"
+		action := red + "DROP" + reset
 		if value.Action == config.POLICY_ACCEPT {
-			action = "ACCEPT"
+			action = green + "ACCEPT" + reset
 		}
 		protocol := "any"
 		switch value.Protocol {

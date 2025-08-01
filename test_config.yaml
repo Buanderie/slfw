@@ -1,58 +1,51 @@
   inbound_policy: "DROP"
   inbound:
-    - rule_name: "block_ssh_inbound"
-      action: "allow"
+    - rule_name: "allow_ssh_inbound"
+      action: "accept"
       protocol: "tcp"
-      ip: "192.168.1.0/24"
+      ip: "any"
       port: 22
       description: "Block inbound SSH traffic from local network"
 
     - rule_name: "allow_web_inbound"
-      action: "allow"
-      protocol: "tcp"
+      action: "accept"
+      protocol: "udp"
       ip: "any"
       port_range:
-        start: 80
+        start: 50
         end: 443
       description: "Allow inbound HTTP and HTTPS traffic from any source"
 
     - rule_name: "allow_icmp_inbound"
-      action: "allow"
+      action: "accept"
       protocol: "icmp"
-      ip: "192.168.1.12"
+      ip: "any"
       description: "Allow all inbound ICMP traffic"
-
-    - rule_name: "block_specific_ip_inbound"
-      action: "block"
-      protocol: "any"
-      ip: "203.0.113.5/32"
-      port: "any"
-      description: "Block all inbound traffic from a specific IP"
 
   outbound_policy: "DROP"
   outbound:
     - rule_name: "allow_ssh_outbound"
-      action: "allow"
+      action: "accept"
       protocol: "tcp"
-      ip: "192.168.1.0/24"
+      ip: "any"
       port: 22
       description: "Allow outbound DNS queries to Google DNS"
     - rule_name: "allow_icmp_outbound"
-      action: "allow"
+      action: "accept"
       protocol: "icmp"
       ip: "any"
       description: "Block all outbound ICMP traffic to specified network"
     - rule_name: "allow_smtp_outbound"
-      action: "allow"
+      action: "accept"
       protocol: "tcp"
       ip: "any"
       port: 25
       description: "Allow outbound SMTP traffic to any destination"
-    - rule_name: "block_specific_port_range_outbound"
-      action: "block"
-      protocol: "tcp"
-      ip: "10.0.0.0/16"
+    - rule_name: "allow_web_inbound"
+      action: "accept"
+      protocol: "udp"
+      ip: "any"
       port_range:
-        start: 1000
-        end: 2000
-      description: "Block outbound TCP traffic to specific network on ports 1000-2000"
+        start: 50
+        end: 443
+      description: "Allow inbound HTTP and HTTPS traffic from any source"
