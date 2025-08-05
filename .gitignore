@@ -1,0 +1,4 @@
+fwebpf/*_bpf*.go
+fwebpf/*_bpf*.o
+version.txt
+secure-linux-firewall

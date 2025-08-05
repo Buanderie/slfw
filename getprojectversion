@@ -1,0 +1,78 @@
+#!/bin/bash
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+generate_version() {
+
+  # Check if a directory argument was provided
+  local target_dir="${1:-.}"
+
+  # Prevent errors
+  git config --global --add safe.directory "$SCRIPT_DIR"
+
+  # Check if the target directory is a git repository
+  if ! git -C "$target_dir" rev-parse --is-inside-work-tree &>/dev/null; then
+    echo "detached"
+    return 1
+  fi
+
+  # Check if there are uncommitted changes in the directory
+  if [[ -n $(git -C "$target_dir" status --porcelain) ]]; then
+    # Uncommitted changes: add "dirty" prefix, use checksum and current date
+    local checksum current_date
+    # checksum=$(find "$target_dir" -type f -not -path "$target_dir/.git/*" -exec xxhsum {} + | xxhsum | awk '{print $1}')
+    checksum=$(git -C "$target_dir" describe --tags --always --dirty)
+    current_date=$(date +%d%m%Y-%H%M%S)
+    suffix="-dirty"
+    # Check if the string already ends with "-dirty"
+    if [[ "$checksum" != *"$suffix" ]]; then
+        checksum+="$suffix"
+    fi
+    echo "${checksum}"
+  else
+    # No uncommitted changes: use the latest tag or commit as base version
+    local latest_tag_or_commit tag_commit_timestamp
+    latest_tag_or_commit=$(git -C "$target_dir" describe --tags --always)
+    tag_commit_timestamp=$(git -C "$target_dir" log -1 --format=%cd --date=format:%d%m%Y-%H%M%S "$latest_tag_or_commit")
+    echo "${latest_tag_or_commit}"
+  fi
+
+}
+
+
+# Check if the number of arguments is valid
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+    echo "Usage: $0 <path> [--describe]"
+    exit 1
+fi
+
+# Assign arguments
+path="$1"
+describe=false
+
+# Check if the second argument is --describe
+if [ $# -eq 2 ]; then
+    if [ "$2" == "--describe" ]; then
+        describe=true
+    else
+        echo "Invalid second argument. Only '--describe' is allowed."
+        exit 1
+    fi
+fi
+
+# Output based on --describe flag
+if [ "$describe" = true ]; then
+    if ! git -C "$path" rev-parse --is-inside-work-tree &>/dev/null; then
+      echo "detached (not from a git repository)"
+    else
+      echo "Main repository:"
+      # git -C "$path" describe --tags --always --dirty
+      # git -C "$path" log -1 --oneline
+      git -C "$path" describe --all --long --dirty
+      echo -e "\nSubmodules:"
+      # git -C "$path" submodule foreach 'echo $path: $(git describe --all --long); git log -5 --oneline; echo ""'
+      git -C "$path" submodule foreach 'echo $path: $(git describe --all --long --dirty); echo ""'
+    fi
+else
+    generate_version $path
+fi

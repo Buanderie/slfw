@@ -609,19 +609,19 @@ func RetrieveFirewallBinaryRules(ifaceName string, mapName string) ([]config.Rul
 		xdpAttached = true
 	}
 
-	filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
-	if err != nil {
-		return binaryRules, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
-	}
-	tcAttached := false
-	for _, f := range filters {
-		if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
-			tcAttached = true
-			break
-		}
-	}
+	// filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
+	// if err != nil {
+	// 	return binaryRules, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
+	// }
+	// tcAttached := false
+	// for _, f := range filters {
+	// 	if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
+	// 		tcAttached = true
+	// 		break
+	// 	}
+	// }
 
-	if !xdpAttached || !tcAttached {
+	if !xdpAttached {
 		errPrint(os.Stderr, "eBPF programs not fully attached to interface %s\n", ifaceName)
 		os.Exit(1)
 	}
@@ -664,19 +664,19 @@ func GetDefaultPolicy(ifaceName string, mapName string) (string, error) {
 		xdpAttached = true
 	}
 
-	filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
-	if err != nil {
-		return retValue, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
-	}
-	tcAttached := false
-	for _, f := range filters {
-		if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
-			tcAttached = true
-			break
-		}
-	}
+	// filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
+	// if err != nil {
+	// 	return retValue, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
+	// }
+	// tcAttached := false
+	// for _, f := range filters {
+	// 	if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
+	// 		tcAttached = true
+	// 		break
+	// 	}
+	// }
 
-	if !xdpAttached || !tcAttached {
+	if !xdpAttached {
 		errPrint(os.Stderr, "eBPF programs not fully attached to interface %s\n", ifaceName)
 		os.Exit(1)
 	}
@@ -723,19 +723,19 @@ func RetrieveFirewallConfig(ifaceName string) (config.FirewallConfig, error) {
 		xdpAttached = true
 	}
 
-	filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
-	if err != nil {
-		return ifaceConfig, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
-	}
-	tcAttached := false
-	for _, f := range filters {
-		if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
-			tcAttached = true
-			break
-		}
-	}
+	// filters, err := netlink.FilterList(ifaceLink, netlink.HANDLE_MIN_EGRESS)
+	// if err != nil {
+	// 	return ifaceConfig, fmt.Errorf("listing filters on %s: %v", ifaceName, err)
+	// }
+	// tcAttached := false
+	// for _, f := range filters {
+	// 	if bpfFilter, ok := f.(*netlink.BpfFilter); ok && bpfFilter.Name == "tc_firewall_outbound" {
+	// 		tcAttached = true
+	// 		break
+	// 	}
+	// }
 
-	if !xdpAttached || !tcAttached {
+	if !xdpAttached {
 		errPrint(os.Stderr, "eBPF programs not fully attached to interface %s\n", ifaceName)
 		os.Exit(1)
 	}

@@ -41,33 +41,33 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
 
     // Ensure Ethernet header is present
     if (data + sizeof(struct ethhdr) > data_end) {
-        bpf_printk("Invalid Ethernet header\n");
+        // bpf_printk("Invalid Ethernet header\n");
         return XDP_PASS;
     }
 
     struct ethhdr *eth = data;
     // Explicitly check for h_proto access
     if ((void *)&eth->h_proto + sizeof(__u16) > data_end) {
-        bpf_printk("Cannot access eth->h_proto\n");
+        // bpf_printk("Cannot access eth->h_proto\n");
         return XDP_PASS;
     }
 
     // Check for IPv4
     if (eth->h_proto != __constant_htons(ETH_P_IP)) {
-        bpf_printk("Non-IPv4 packet\n");
+        // bpf_printk("Non-IPv4 packet\n");
         return XDP_PASS;
     }
 
     // Ensure minimum IP header is present
     if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end) {
-        bpf_printk("Invalid IP header\n");
+        // bpf_printk("Invalid IP header\n");
         return XDP_PASS;
     }
 
     struct iphdr *ip = data + sizeof(struct ethhdr);
     // Verify IP header length
     if (ip->ihl < 5) {
-        bpf_printk("Invalid IP ihl=%d\n", ip->ihl);
+        // bpf_printk("Invalid IP ihl=%d\n", ip->ihl);
         return XDP_PASS;
     }
 
@@ -83,14 +83,14 @@ int xdp_firewall_inbound(struct xdp_md *ctx) {
             return XDP_PASS;
         }
         struct tcphdr *tcp = transport_header;
-        dst_port = __constant_ntohs(tcp->source);
+        dst_port = __constant_ntohs(tcp->dest);
     } else if (ip->protocol == IPPROTO_UDP) {
         if (transport_header + sizeof(struct udphdr) > data_end) {
             // bpf_printk("Invalid UDP header\n");
             return XDP_PASS;
         }
         struct udphdr *udp = transport_header;
-        dst_port = __constant_ntohs(udp->source);
+        dst_port = __constant_ntohs(udp->dest);
     } else if (ip->protocol != IPPROTO_ICMP) {
         // bpf_printk("Unsupported protocol=%d\n", ip->protocol);
         return XDP_PASS;

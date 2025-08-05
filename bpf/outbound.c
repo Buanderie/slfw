@@ -9,7 +9,7 @@
 #include <bpf/bpf_helpers.h>
 #include "filter.h"
 
-#define MAX_RULES 16
+#define MAX_RULES 32
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -37,44 +37,169 @@ static inline firewall_rule_t *check_rule(__u32 rule_idx) {
 
 SEC("tc")
 int tc_firewall_outbound(struct __sk_buff *skb) {
+    // void *data = (void *)(long)skb->data;
+    // void *data_end = (void *)(long)skb->data_end;
+
+    // bpf_printk("[OUTOUTIN] Hello\n");
+
+    // // return TC_ACT_OK;
+
+    // // Parse Ethernet header
+    // struct ethhdr *eth = data;
+    // if (data + sizeof(*eth) > data_end) {
+    //     return TC_ACT_OK; // Malformed packet
+    // }
+
+    // // Check for IPv4
+    // if (eth->h_proto != __constant_htons(ETH_P_IP)) {
+    //     return TC_ACT_OK; // Non-IPv4, pass
+    // }
+
+    // // Parse IP header
+    // struct iphdr *ip = data + sizeof(*eth);
+    // if ((void *)ip + sizeof(*ip) > data_end) {
+    //     return TC_ACT_OK; // Malformed packet
+    // }
+
+    // __u16 dst_port = 0;
+    // // Parse TCP/UDP header for ports
+    // if (ip->protocol == IPPROTO_TCP) {
+    //     struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
+    //     if ((void *)tcp + sizeof(*tcp) > data_end) {
+    //         return TC_ACT_OK;
+    //     }
+    //     dst_port = __constant_ntohs(tcp->dest);
+    // } else if (ip->protocol == IPPROTO_UDP) {
+    //     struct udphdr *udp = (void *)ip + (ip->ihl * 4);
+    //     if ((void *)udp + sizeof(*udp) > data_end) {
+    //         return TC_ACT_OK;
+    //     }
+    //     dst_port = __constant_ntohs(udp->dest);
+    // } else if (ip->protocol != IPPROTO_ICMP) {
+    //     return TC_ACT_OK; // Unknown protocol, pass
+    // }
+
+    // // Iterate over rules
+    // for (__u32 i = 0; i < MAX_RULES; i++) {
+    //     firewall_rule_t *rule = check_rule(i);
+    //     if (!rule) {
+    //         continue;
+    //     }
+
+    //     // Check if rule is enabled
+    //     if (!rule->enabled) {
+    //         continue;
+    //     }
+
+    //     // // Match protocol (0 means any protocol)
+    //     // if (rule->protocol != 0 && rule->protocol != ip->protocol) {
+    //     //     continue;
+    //     // }
+
+    //     // Match source IP (0 means any IP)
+    //     // if (rule->ip != 0) {
+    //     //     __u32 dst_ip = __constant_ntohl(ip->daddr);
+    //     //     if ((dst_ip & rule->netmask) != (rule->ip & rule->netmask)) {
+    //     //         continue;
+    //     //     }
+    //     // }
+
+    //     // Match port for TCP/UDP (no port check for ICMP)
+    //     if (ip->protocol != IPPROTO_ICMP) {
+    //         if (rule->has_port_range) {
+    //             // Check port range
+    //             __u16 start = rule->port_info.port_range.start;
+    //             __u16 end = rule->port_info.port_range.end;
+    //             if (dst_port < start || dst_port > end) {
+    //                 continue;
+    //             }
+    //         } else {
+    //             // Check single port (0 means any port)
+    //             if (rule->port_info.port != 0 && rule->port_info.port != dst_port) {
+    //                 continue;
+    //             }
+    //         }
+    //     }
+
+    //     // Rule matches, apply action
+    //     // bpf_printk("[OUT] MATCH RULE [ %s ] idx=%d action=%d\n", rule->rule_name, i, rule->action);
+    //     if (rule->action == POLICY_ACCEPT) {
+    //         return TC_ACT_OK;
+    //     }
+    //     return TC_ACT_SHOT;
+    // }
+
+    // // Apply default policy
+    // __u32 key = 0;
+    // __u8 default_action = POLICY_DROP; // Default to DROP
+    // __u8 *policy = bpf_map_lookup_elem(&outbound_default_policy, &key);
+    // if (policy) {
+    //     default_action = *policy;
+    // }
+    // // bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
+    // if (default_action == POLICY_ACCEPT) {
+    //     return TC_ACT_OK;
+    // }
+    // return TC_ACT_SHOT;
+
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
 
-    bpf_printk("[OUTOUTIN] Hello\n");
+    // Ensure Ethernet header is present
+    if (data + sizeof(struct ethhdr) > data_end) {
+        // bpf_printk("Invalid Ethernet header\n");
+        return TC_ACT_OK;
+    }
 
-    // Parse Ethernet header
     struct ethhdr *eth = data;
-    if (data + sizeof(*eth) > data_end) {
-        return TC_ACT_OK; // Malformed packet
+    // Explicitly check for h_proto access
+    if ((void *)&eth->h_proto + sizeof(__u16) > data_end) {
+        // bpf_printk("Cannot access eth->h_proto\n");
+        return TC_ACT_OK;
     }
 
     // Check for IPv4
     if (eth->h_proto != __constant_htons(ETH_P_IP)) {
-        return TC_ACT_OK; // Non-IPv4, pass
+        // bpf_printk("Non-IPv4 packet\n");
+        return TC_ACT_OK;
     }
 
-    // Parse IP header
-    struct iphdr *ip = data + sizeof(*eth);
-    if ((void *)ip + sizeof(*ip) > data_end) {
-        return TC_ACT_OK; // Malformed packet
+    // Ensure minimum IP header is present
+    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end) {
+        // bpf_printk("Invalid IP header\n");
+        return TC_ACT_OK;
     }
+
+    struct iphdr *ip = data + sizeof(struct ethhdr);
+    // Verify IP header length
+    if (ip->ihl < 5) {
+        // bpf_printk("Invalid IP ihl=%d\n", ip->ihl);
+        return TC_ACT_OK;
+    }
+
+    // Calculate transport header offset
+    __u32 ip_header_len = ip->ihl * 4;
+    void *transport_header = (void *)ip + ip_header_len;
 
     __u16 dst_port = 0;
     // Parse TCP/UDP header for ports
     if (ip->protocol == IPPROTO_TCP) {
-        struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
-        if ((void *)tcp + sizeof(*tcp) > data_end) {
+        if (transport_header + sizeof(struct tcphdr) > data_end) {
+            // bpf_printk("Invalid TCP header\n");
             return TC_ACT_OK;
         }
-        dst_port = __constant_ntohs(tcp->dest);
+        struct tcphdr *tcp = transport_header;
+        dst_port = __constant_ntohs(tcp->source);
     } else if (ip->protocol == IPPROTO_UDP) {
-        struct udphdr *udp = (void *)ip + (ip->ihl * 4);
-        if ((void *)udp + sizeof(*udp) > data_end) {
+        if (transport_header + sizeof(struct udphdr) > data_end) {
+            // bpf_printk("Invalid UDP header\n");
             return TC_ACT_OK;
         }
-        dst_port = __constant_ntohs(udp->dest);
+        struct udphdr *udp = transport_header;
+        dst_port = __constant_ntohs(udp->source);
     } else if (ip->protocol != IPPROTO_ICMP) {
-        return TC_ACT_OK; // Unknown protocol, pass
+        // bpf_printk("Unsupported protocol=%d\n", ip->protocol);
+        return TC_ACT_OK;
     }
 
     // Iterate over rules
@@ -96,23 +221,21 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
 
         // Match source IP (0 means any IP)
         if (rule->ip != 0) {
-            __u32 dst_ip = __constant_ntohl(ip->daddr);
-            if ((dst_ip & rule->netmask) != (rule->ip & rule->netmask)) {
+            __u32 src_ip = __constant_ntohl(ip->daddr);
+            if ((src_ip & rule->netmask) != (rule->ip & rule->netmask)) {
                 continue;
             }
         }
 
-        // Match port for TCP/UDP (no port check for ICMP)
+        // Match destination port for TCP/UDP (no port check for ICMP)
         if (ip->protocol != IPPROTO_ICMP) {
             if (rule->has_port_range) {
-                // Check port range
                 __u16 start = rule->port_info.port_range.start;
                 __u16 end = rule->port_info.port_range.end;
                 if (dst_port < start || dst_port > end) {
                     continue;
                 }
             } else {
-                // Check single port (0 means any port)
                 if (rule->port_info.port != 0 && rule->port_info.port != dst_port) {
                     continue;
                 }
@@ -120,7 +243,7 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
         }
 
         // Rule matches, apply action
-        bpf_printk("[OUT] MATCH RULE [ %s ] idx=%d action=%d\n", rule->rule_name, i, rule->action);
+        // bpf_printk("[OUT] MATCH RULE [ %s ] idx=%d action=%d\n", rule->rule_name, i, rule->action);
         if (rule->action == POLICY_ACCEPT) {
             return TC_ACT_OK;
         }
@@ -129,16 +252,17 @@ int tc_firewall_outbound(struct __sk_buff *skb) {
 
     // Apply default policy
     __u32 key = 0;
-    __u8 default_action = POLICY_DROP; // Default to DROP
+    __u8 default_action = POLICY_DROP;
     __u8 *policy = bpf_map_lookup_elem(&outbound_default_policy, &key);
     if (policy) {
         default_action = *policy;
     }
-    bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
+    // bpf_printk("APPLY DEFAULT POLICY action=%d\n", default_action);
     if (default_action == POLICY_ACCEPT) {
         return TC_ACT_OK;
     }
     return TC_ACT_SHOT;
+
 }
 
 char _license[] SEC("license") = "GPL";

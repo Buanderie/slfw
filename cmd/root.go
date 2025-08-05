@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	_ "embed"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
+
+//go:embed version.txt
+var versionString string
 
 // Initialize colored output
 var (
@@ -20,6 +24,7 @@ and TC (Traffic Control) for outbound traffic filtering.
 
 This tool allows you to attach, configure, and manage firewall rules
 on network interfaces using high-performance eBPF programs.`,
+	Version: versionString, // Set the version from version package
 }
 
 func Execute() error {
